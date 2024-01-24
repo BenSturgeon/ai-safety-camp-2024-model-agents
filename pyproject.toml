@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "ai-safety-camp"
+version = "0.1.0"
+description = "AI safety research on goal specification for model agents"
+authors = ["mickeybeurskens <mickeybeurskens@gmail.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<=3.10"
+procgen = "^0.10.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
