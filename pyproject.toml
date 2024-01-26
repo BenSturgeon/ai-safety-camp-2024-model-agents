@@ -7,8 +7,10 @@ readme = "README.md"
 packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<=3.10"
+python = ">=3.9,<=3.11"
 procgen = "^0.10.7"
+ipykernel = "^6.29.0"
+stable-baselines3 = "^2.2.1"
 
 
 [build-system]
