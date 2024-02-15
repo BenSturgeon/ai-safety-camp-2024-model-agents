@@ -165,5 +165,8 @@ data/
 # Tensorflow 
 *.pth
 
+# Pytorch
+*.pt
+
 # MLFlow
 mlruns/

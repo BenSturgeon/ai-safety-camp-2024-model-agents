@@ -13,3 +13,8 @@ python3.9 -m venv venv
 source venv/bin/activate
 poetry install
 ```
+
+Since `procgen-tools` is "special" (deps are not managed well) we need to install it manually afterwards:
+```bash
+pip install git+https://github.com/UlisseMini/procgen-tools.git
+``` 
