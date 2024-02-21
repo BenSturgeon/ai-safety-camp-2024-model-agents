@@ -171,3 +171,6 @@ data/
 
 # MLFlow
 mlruns/
+
+# gifs
+*.gif
