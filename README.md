@@ -16,5 +16,6 @@ poetry install
 
 Since `procgen-tools` is "special" (deps are not managed well) we need to install it manually afterwards:
 ```bash
+(to access the poetry environment in your shell for installint pip, use the command: "poetry shell")
 pip install git+https://github.com/UlisseMini/procgen-tools.git
 ``` 
