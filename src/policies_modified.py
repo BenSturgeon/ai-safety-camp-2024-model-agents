@@ -85,5 +85,5 @@ class ImpalaCNN(nn.Module):
     def save_to_file(self, model_path):
         torch.save(self.state_dict(), model_path)
 
-    def load_from_file(self, model_path):
-        self.load_state_dict(torch.load(model_path))
+    def load_from_file(self, model_path, device):
+        self.load_state_dict(torch.load(model_path, map_location="cpu"))

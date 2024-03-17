@@ -11,7 +11,7 @@ from vec_env import VecMonitor
 from vec_env import VecNormalize
 from util import logger
 
-from src.policies_modified import ImpalaCNN
+from policies import ImpalaCNN
 from ppo import PPO
 import wandb
 
