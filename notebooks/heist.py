@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
+#This file acts as a means to decode and edit the underlying state of the heist environment for the purposes of our interpretability work.
 
+# The code is based off Monte's code in procgen tools with modifications to account for the differences in environment.
 
 
 import gym
@@ -474,16 +476,6 @@ def get_mouse_pos(
     return ((WORLD_DIM - 1) - row if flip_y else row), col
 
 
-
-@dataclass
-class StateValue:
-    val: typing.Any
-    idx: int
-
-StateValues = typing.Dict[
-    str, typing.Any
-]  # Union[StateValue, List[StateValue], 'StateValues']]
-Square = typing.Tuple[int, int]
 
 
 def state_from_venv(venv, idx: int = 0) -> EnvState:
