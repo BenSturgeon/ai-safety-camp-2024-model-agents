@@ -115,3 +115,55 @@ def compute_activation_differences(activations1, activations2):
             print(f"Key: {key} has only zero differences.")
     print(differences)
     return differences
+
+def plot_activations_for_layers_side_by_side(activations1, activations2, layer_paths, save_filename_prefix=None):
+    for layer_name in layer_paths:
+        
+        # Check if the specified layer's activations are available in both sets
+        if layer_name not in activations1 or layer_name not in activations2:
+            print(f"No activations found for layer: {layer_name}")
+            continue
+
+        # Extract the activation tensors for the specified layer from both sets
+        activation_tensor1 = activations1[layer_name][0]
+        activation_tensor2 = activations2[layer_name][0]
+
+
+        # The tensors are 3-dimensional [channels, height, width]
+        num_activations = activation_tensor1.shape[0]  # Number of activation maps
+
+        # Calculate grid size
+        grid_size = math.ceil(math.sqrt(num_activations))
+
+        # Create a figure with dynamic subplots based on the number of activations
+        fig, axes = plt.subplots(grid_size, grid_size * 2, figsize=(grid_size * 4, grid_size * 2))
+        if grid_size == 1:
+            axes = np.array([[axes[0], axes[1]]])  # Ensure axes can be indexed with two dimensions
+
+        # Initialize an index for activation maps
+        activation_idx = 0
+        for i in range(grid_size):
+            for j in range(grid_size * 2):
+                ax = axes[i, j]
+                # Plot the activation maps side by side if we haven't gone through all of them yet
+                if activation_idx < num_activations:
+                    if j % 2 == 0:
+                        ax.imshow(activation_tensor1[activation_idx, :, :], cmap='viridis', aspect='auto')
+                        ax.set_title(f'Filter {activation_idx+1} (Set 1)', fontsize=8)
+                    else:
+                        ax.imshow(activation_tensor2[activation_idx, :, :], cmap='viridis', aspect='auto')
+                        ax.set_title(f'Filter {activation_idx+1} (Set 2)', fontsize=8)
+                        activation_idx += 1
+                else:
+                    ax.axis('off')  # Hide axes without data
+                ax.axis('off')  # Hide axes for all plots for a cleaner look
+
+        plt.tight_layout()
+
+        # Save or show the plot
+        if save_filename_prefix:
+            save_filename = f"{save_filename_prefix}_{layer_name}.png"
+            plt.savefig(save_filename)
+            plt.close()
+        else:
+            plt.show()
