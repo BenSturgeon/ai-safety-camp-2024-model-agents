@@ -608,34 +608,36 @@ def create_key_states(key_color_combinations, num_samples=5, num_levels=100):
     observations_list = [[] for _ in range(num_samples)]
     key_indices = {"blue": 0, "green": 1, "red": 2}
 
-    sample_idx = 0
-    while sample_idx < num_samples:
-        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
-        state = state_from_venv(venv, 0)
+    venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+    state = state_from_venv(venv, 0)
 
-        if not all(color in state.get_key_colors() for color in ['blue', 'green', 'red']):
-            venv.close()
-            continue
+    full_grid = state.full_grid(with_mouse=False)
+    entities = state.state_vals["ents"]
+    legal_mouse_positions = get_legal_mouse_positions(full_grid, entities)
 
+    color_positions = {}
+    available_colors = state.get_key_colors()
+    for color in available_colors:
+        key_index = key_indices[color]
+        x, y = legal_mouse_positions[random.randint(0, len(legal_mouse_positions) - 1)]
+        color_positions[color] = (x, y)
+
+    for _ in range(num_samples):
         for key_colors in key_color_combinations:
             state.remove_all_entities()
-            full_grid = state.full_grid(with_mouse=False)
-            entities = state.state_vals["ents"]
-            legal_mouse_positions = get_legal_mouse_positions(full_grid, entities)
 
-            for i, color in enumerate(key_colors):
-                key_index = key_indices[color]
-                x, y = legal_mouse_positions[random.randint(0, len(legal_mouse_positions) - 1)]
-                state.set_key_position(key_index, x, y)
+            for color in key_colors:
+                if color in available_colors:
+                    key_index = key_indices[color]
+                    x, y = color_positions[color]
+                    state.set_key_position(key_index, x, y)
 
             state_bytes = state.state_bytes
             if state_bytes is not None:
                 venv.env.callmethod("set_state", [state_bytes])
                 obs = venv.reset()
-                observations_list[sample_idx].append(obs[0])
+                observations_list[_].append(obs[0])
 
-        venv.close()
-        sample_idx += 1
-
+    venv.close()
     return observations_list
 
