@@ -228,7 +228,7 @@ def create_venv(
     venv = wrap_venv(venv)
     return venv
     
-def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=2):
+def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200):
 
     observations = []
     observation = env.reset()
@@ -237,17 +237,15 @@ def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif
     frames=[]
     
     
+
+    # observation = colour_swap(observation)
     count = 0
     while not done:
         if save_gif:
             frames.append(env.render(mode='rgb_array'))  
-        observation= np.squeeze(observation)
-        observation =np.transpose(observation, (2,1,0))
-        print(observation.shape)
-        action = generate_action(model, observation) 
-        print(action) 
+        action = generate_action(model, observation, is_procgen_env=False) 
+        
         observation, reward, done, info = env.step(action)
-        # observation = colour_swap(observation)
         total_reward += reward
         observations.append(observation)
         count +=1

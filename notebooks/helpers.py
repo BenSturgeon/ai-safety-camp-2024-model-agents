@@ -23,6 +23,55 @@ import imageio
 from src.policies_impala import ImpalaCNN
 from src.visualisation_functions import *
 
+class ModelActivations:
+    def __init__(self, model):
+        self.activations = {}
+        self.model = model
+        self.hooks = []  # To keep track of hooks
+
+    def clear_hooks(self):
+        # Remove all previously registered hooks
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+        self.activations = {}
+
+    def get_activation(self, name):
+        def hook(model, input, output):
+            processed_output = []
+            for item in output:
+                if isinstance(item, torch.Tensor):
+                    processed_output.append(item.detach())
+                elif isinstance(item, torch.distributions.Categorical):
+                    processed_output.append(item.logits.detach())
+                else:
+                    processed_output.append(item)
+            self.activations[name] = tuple(processed_output)
+        return hook
+
+    def register_hook_by_path(self, path, name):
+        elements = path.split('.')
+        model = self.model
+        for i, element in enumerate(elements):
+            if '[' in element:
+                base, index = element.replace(']', '').split('[')
+                index = int(index)
+                model = getattr(model, base)[index]
+            else:
+                model = getattr(model, element)
+            if i == len(elements) - 1:
+                hook = model.register_forward_hook(self.get_activation(name))
+                self.hooks.append(hook)  # Keep track of the hook
+
+    def run_with_cache(self, input, layer_paths):
+        self.clear_hooks()  # Clear any existing hooks
+        self.activations = {}  # Reset activations
+        for path in layer_paths:
+            self.register_hook_by_path(path, path.replace('.', '_'))
+        output = self.model(input)
+        return output, self.activations
+
+
 
 @torch.no_grad()
 def generate_action(model, observation, is_procgen_env=False):
