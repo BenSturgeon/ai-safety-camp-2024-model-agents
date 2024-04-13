@@ -235,3 +235,6 @@ def observation_to_rgb(observation):
     rgb_image = rgb_image.astype(np.uint8)
 
     return rgb_image
+
+def rename_paths(paths):
+    return [s.replace('.', '_') for s in paths]
