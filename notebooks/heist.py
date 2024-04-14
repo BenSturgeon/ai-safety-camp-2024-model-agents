@@ -455,6 +455,15 @@ class EnvState:
             ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
+    def delete_specific_keys_and_locks(self, colors_to_delete):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+                if ents["image_theme"].val in [KEY_COLORS[color] for color in colors_to_delete]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
 
             
 
@@ -647,9 +656,6 @@ def create_key_states(key_color_combinations, num_samples=5, num_levels=100):
 
     return observations_list
 
-
-
-
 def create_gem_states(num_samples=5, num_levels=100):
     observations_list = []
 
@@ -679,3 +685,138 @@ def create_gem_states(num_samples=5, num_levels=100):
         venv.close()
 
     return observations_list
+
+# def create_classified_dataset(num_samples_per_category=5, num_levels=100):
+#     dataset = {
+#         "gem": [],
+#         "blue_key": [],
+#         "green_key": [],
+#         "red_key": []
+#     }
+
+#     while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+#         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+#         state = state_from_venv(venv, 0)
+#         key_colors = state.get_key_colors()
+
+#         if not key_colors:
+#             if len(dataset["gem"]) < num_samples_per_category:
+#                 obs = venv.reset()
+#                 dataset["gem"].append(obs[0].transpose(1,2,0))
+#         else:
+#             for color in key_colors:
+#                 if len(dataset[f"{color}_key"]) < num_samples_per_category:
+#                     if color == "blue":
+#                         state.delete_specific_keys_and_locks([])
+#                     elif color == "green":
+#                         state.delete_specific_keys_and_locks([0])
+#                     elif color == "red":
+#                         state.delete_specific_keys_and_locks([0, 1])
+
+#                     state_bytes = state.state_bytes
+#                     if state_bytes is not None:
+#                         venv.env.callmethod("set_state", [state_bytes])
+#                         obs = venv.reset()
+#                         dataset[f"{color}_key"].append(obs[0].transpose(1,2,0))
+
+#         venv.close()
+
+#     return dataset
+
+def create_classified_dataset(num_samples_per_category=5, num_levels=100):
+    dataset = {
+        "gem": [],
+        "blue_key": [],
+        "green_key": [],
+        "red_key": [],
+        "blue_lock": [],
+        "green_lock": [],
+        "red_lock": []
+    }
+
+    key_indices = {"blue": 0, "green": 1, "red": 2}
+
+    def delete_keys(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys_and_locks(self, stage):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+                if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+                elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    EnvState.delete_keys = delete_keys
+    EnvState.delete_keys_and_locks = delete_keys_and_locks
+
+    while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        state = state_from_venv(venv, 0)
+        key_colors = state.get_key_colors()
+
+        if not key_colors:
+            if len(dataset["gem"]) < num_samples_per_category:
+                state_bytes = state.state_bytes
+                if state_bytes is not None:
+                    venv.env.callmethod("set_state", [state_bytes])
+                    obs = venv.reset()
+                    dataset["gem"].append(obs[0].transpose(1,2,0))
+        else:
+            if "red" in key_colors:
+                if len(dataset["red_key"]) < num_samples_per_category:
+                    state.delete_keys_and_locks(3)
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["red_key"].append(obs[0].transpose(1,2,0))
+                if len(dataset["red_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["red_lock"].append(obs[0].transpose(1,2,0))
+            elif "green" in key_colors:
+                if len(dataset["green_key"]) < num_samples_per_category:
+                    state.delete_keys_and_locks(2)
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["green_key"].append(obs[0].transpose(1,2,0))
+                if len(dataset["green_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["green_lock"].append(obs[0].transpose(1,2,0))
+            elif "blue" in key_colors:
+                if len(dataset["blue_key"]) < num_samples_per_category:
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["blue_key"].append(obs[0].transpose(1,2,0))
+                if len(dataset["blue_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        obs = venv.reset()
+                        dataset["blue_lock"].append(obs[0].transpose(1,2,0))
+
+        venv.close()
+
+    return dataset
