@@ -294,3 +294,20 @@ def observation_to_rgb(observation):
 
 def rename_paths(paths):
     return [s.replace('.', '_') for s in paths]
+
+
+def plot_confusion_matrix(conf_matrix, labels_dict):
+    # Define the size of the figure
+    plt.figure(figsize=(10, 7))
+
+    # Convert labels_dict keys to a list for x and y axis labels
+    labels = list(labels_dict.keys())
+
+    # Plotting using seaborn
+    sns.heatmap(conf_matrix, annot=True, fmt='g', cmap='Blues', cbar=False, xticklabels=labels, yticklabels=labels)
+
+    # Adding labels and title for clarity
+    plt.xlabel('Predicted labels')
+    plt.ylabel('True labels')
+    plt.title('Confusion Matrix Visualization')
+    plt.show()
