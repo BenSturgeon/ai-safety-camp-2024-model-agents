@@ -820,3 +820,76 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=100):
         venv.close()
 
     return dataset
+
+
+def set_mouse_to_center(state):
+    # Find the legal positions for the mouse
+    full_grid = state.full_grid(with_mouse=False)
+    entities = state.state_vals["ents"]
+    legal_mouse_positions = get_legal_mouse_positions(full_grid, entities)
+
+    if not legal_mouse_positions:
+        return None
+
+    # Calculate the middle point based on legal positions
+    middle_x = sum(pos[0] for pos in legal_mouse_positions) / len(legal_mouse_positions)
+    middle_y = sum(pos[1] for pos in legal_mouse_positions) / len(legal_mouse_positions)
+
+    # Find the legal position closest to the middle point
+    closest_position = min(legal_mouse_positions, key=lambda pos: (pos[0] - middle_x) ** 2 + (pos[1] - middle_y) ** 2)
+
+    # Set the mouse position to the closest legal position
+    state.set_mouse_pos(*closest_position)
+
+    return state
+
+def create_direction_dataset(num_samples_per_category=5, num_levels=100):
+    dataset = {
+        "top_left": [],
+        "top_right": [],
+        "bottom_left": [],
+        "bottom_right": []
+    }
+
+    while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        state = state_from_venv(venv, 0)
+
+        # Set the mouse position to the center based on legal positions
+        state.remove_all_entities()
+        state = set_mouse_to_center(state)
+        if state is None:
+            venv.close()
+            continue
+
+        # Find the legal positions for the target
+        full_grid = state.full_grid(with_mouse=False)
+        entities = state.state_vals["ents"]
+        legal_positions = get_legal_mouse_positions(full_grid, entities)
+
+        if len(legal_positions) < 4:
+            venv.close()
+            continue
+
+        # Find the farthest corners based on legal positions
+        top_left_corner = min(legal_positions, key=lambda pos: pos[0] + pos[1])
+        top_right_corner = max(legal_positions, key=lambda pos: pos[0] - pos[1])
+        bottom_left_corner = max(legal_positions, key=lambda pos: -pos[0] + pos[1])
+        bottom_right_corner = max(legal_positions, key=lambda pos: pos[0] + pos[1])
+
+        # Generate samples for each corner position
+        for corner_pos, category in zip(
+            [top_left_corner, top_right_corner, bottom_left_corner, bottom_right_corner],
+            ["top_left", "top_right", "bottom_left", "bottom_right"]
+        ):
+            if len(dataset[category]) < num_samples_per_category:
+                state.set_gem_position(*corner_pos)
+                state_bytes = state.state_bytes
+                if state_bytes is not None:
+                    venv.env.callmethod("set_state", [state_bytes])
+                    obs = venv.reset()
+                    dataset[category].append(obs[0].transpose(1, 2, 0))
+
+        venv.close()
+
+    return dataset

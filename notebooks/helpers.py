@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import imageio
 
 import sys
@@ -21,6 +22,7 @@ import imageio
 
 
 from src.policies_impala import ImpalaCNN
+# from src.policies_modified import ImpalaCNN
 from src.visualisation_functions import *
 
 class ModelActivations:
@@ -88,7 +90,7 @@ def generate_action(model, observation, is_procgen_env=False):
         return np.array([action])
     return action
 
-def load_model( model_path = '../model_1400_latest.pt'):
+def load_model(ImpalaCNN = ImpalaCNN, model_path ="../model_1501.0_interpretable.pt"):
     env_name = "procgen:procgen-heist-v0"  
     env = gym.make(env_name, start_level=100, num_levels=200, render_mode="rgb_array", distribution_mode="easy") 
     observation_space = env.observation_space
@@ -97,6 +99,9 @@ def load_model( model_path = '../model_1400_latest.pt'):
     model.load_from_file(model_path, device="cpu")
     return model
 
+def get_model_layer_names(model):
+    layer_names = [name for name, _ in model.named_modules() if isinstance(_, nn.Module)]
+    return layer_names[1:len(layer_names)]
 
 def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
     for layer_name in layer_paths:
@@ -275,6 +280,8 @@ def plot_single_observation(observation):
 
 def observation_to_rgb(observation):
     # Ensure the observation is a 64x64x3 tensor
+    if observation.shape == (1, 3 , 64, 64):
+        observation = observation.squeeze().transpose(1,2,0)
     assert observation.shape == (64, 64, 3), "Observation must be a 64x64x3 tensor"
 
     # Scale the observation values to the range of 0 to 255

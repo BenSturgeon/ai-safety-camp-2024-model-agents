@@ -156,6 +156,10 @@ def train(config, agent, train_env, test_env, model_dir):
             tnow = time.perf_counter()
             fps = int(nbatch / (tnow - tstart))
 
+            train_stats = agent.get_statistics()
+            for stat_name, stat_value in train_stats:
+                wandb.log({stat_name: stat_value})
+
             wandb.log({'steps': step_cnt + 1,
                     'total_steps': (step_cnt + 1) ,
                     'fps': fps,
