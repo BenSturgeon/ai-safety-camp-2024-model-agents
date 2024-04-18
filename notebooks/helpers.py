@@ -90,7 +90,7 @@ def generate_action(model, observation, is_procgen_env=False):
         return np.array([action])
     return action
 
-def load_model(ImpalaCNN = ImpalaCNN, model_path ="../model_1501.0_interpretable.pt"):
+def load_model(ImpalaCNN = ImpalaCNN, model_path ="../model_1400_latest.pt"):
     env_name = "procgen:procgen-heist-v0"  
     env = gym.make(env_name, start_level=100, num_levels=200, render_mode="rgb_array", distribution_mode="easy") 
     observation_space = env.observation_space
