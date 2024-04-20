@@ -317,6 +317,7 @@ def rename_paths(paths):
 def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
     observations = []
     observation = env.reset()
+    plot_single_observation(observation.squeeze().transpose(1,2,0))
     done = False
     total_reward = 0
     frames=[]
@@ -345,6 +346,8 @@ def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif
 def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
     observations = []
     observation = env.reset()
+    plot_single_observation(observation.squeeze().transpose(1,2,0))
+
     done = False
     total_reward = 0
     frames=[]
