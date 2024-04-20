@@ -698,6 +698,79 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
         ), "serialize(deserialize(state_bytes)) != state_bytes"
     return vals
 
+def _parse_maze_state_bytes_handling_buffer_error(state_bytes: bytes, assert_=DEBUG) -> StateValues:
+
+
+    def read_fixed(sb, idx, fmt):
+        sz = struct.calcsize(fmt)
+        if idx + sz > len(sb):
+            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            if fmt == '@i':  # Default for integers
+                default_val = 0
+            elif fmt == '@f':  # Default for floats
+                default_val = float('nan')  # or 0.0 depending on what makes sense for your context
+    
+            # Decide whether to advance idx or not
+            # Option 1: Do not advance idx if you want to try reading again later or handle this case differently
+            # Option 2: Advance idx to skip the expected number of bytes (more risky if data is critical)
+            # idx += sz  # Uncomment this line if you choose to advance idx
+    
+            return default_val, idx
+    
+        val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
+        idx += sz
+        return val, idx
+
+    read_int = lambda sb, idx: read_fixed(sb, idx, "@i")
+    read_float = lambda sb, idx: read_fixed(sb, idx, "@f")
+
+    def read_string(sb, idx):
+        sz, idx = read_int(sb, idx)
+        val = sb[idx : (idx + sz)].decode("ascii")
+        idx += sz
+        return val, idx
+
+
+    # Function to process a value definition and return a value (called recursively for loops)
+    def parse_value(vals, val_def, idx):
+        typ = val_def[0]
+        name = val_def[1]
+        # print((typ, name))
+        if typ == "int":
+            val, idx = read_int(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "float":
+            val, idx = read_float(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "string":
+            val, idx = read_string(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "loop":
+            len_name = val_def[2]
+            loop_val_defs = val_def[3]
+            loop_len = vals[len_name].val
+            vals[name] = []
+            for _ in range(loop_len):
+                vals_this = {}
+                for loop_val_def in loop_val_defs:
+                    idx = parse_value(vals_this, loop_val_def, idx)
+                vals[name].append(vals_this)
+        return idx
+
+    # Dict to hold values
+    vals = {}
+
+    # Loop over list of value defs, parsing each
+    idx = 0
+    for val_def in HEIST_STATE_DICT_TEMPLATE:
+        idx = parse_value(vals, val_def, idx)
+
+
+    if assert_:
+        assert (
+            _serialize_maze_state(vals, assert_=False) == state_bytes
+        ), "serialize(deserialize(state_bytes)) != state_bytes"
+    return vals
 def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
     # Serialize any value to a bytes object
     def serialize_val(val):
