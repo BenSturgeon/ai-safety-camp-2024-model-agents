@@ -78,14 +78,40 @@ class ModelActivations:
 @torch.no_grad()
 def generate_action(model, observation, is_procgen_env=False):
     observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
-
     model_output = model(observation)
-    
     logits = model_output[0].logits  # discard the output of the critic in our actor critic network
-    
     probabilities = torch.softmax(logits, dim=-1)
-    
-    action = torch.multinomial(probabilities, 1).item() 
+    action = torch.multinomial(probabilities, 1).item()
+    if is_procgen_env:
+        return np.array([action])
+    return action
+
+@torch.no_grad()
+def generate_action_with_steering(model, observation, steering_vector, is_procgen_env=True):
+    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+
+    # Define the steering hook function
+    def steering_hook(module, input, output):
+        # Add the steering vector to the output activations
+        modified_output = output + steering_vector.unsqueeze(0)
+        return modified_output
+
+    # Register the steering hook to the 'hidden_fc' layer
+    named_modules_dict = dict(model.named_modules())
+    hidden_fc_layer = named_modules_dict['hidden_fc']
+    steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
+
+    # Forward pass with steering
+    model_output = model(observation)
+
+    # Remove the steering hook
+    steering_handle.remove()
+
+
+
+    logits = model_output[0].logits  # discard the output of the critic in our actor critic network
+    probabilities = torch.softmax(logits, dim=-1)
+    action = torch.multinomial(probabilities, 1).item()
     if is_procgen_env:
         return np.array([action])
     return action
@@ -280,9 +306,7 @@ def plot_single_observation(observation):
 
 def observation_to_rgb(observation):
     # Ensure the observation is a 64x64x3 tensor
-    if observation.shape == (1, 3 , 64, 64):
-        observation = observation.squeeze().transpose(1,2,0)
-    assert observation.shape == (64, 64, 3), "Observation must be a 64x64x3 tensor"
+    # assert observation.shape == (64, 64, 3), "Observation must be a 64x64x3 tensor" #Do we need this?
 
     # Scale the observation values to the range of 0 to 255
     rgb_image = observation * 255
@@ -311,3 +335,63 @@ def plot_confusion_matrix(conf_matrix, labels_dict):
     plt.ylabel('True labels')
     plt.title('Confusion Matrix Visualization')
     plt.show()
+    
+def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+    observations = []
+    observation = env.reset()
+    plot_single_observation(observation.squeeze().transpose(1,2,0))
+    done = False
+    total_reward = 0
+    frames=[]
+    activations = {}
+    # observation = colour_swap(observation)
+    count = 0
+    while not done:
+        if save_gif:
+            frames.append(env.render(mode='rgb_array'))
+        observation= np.squeeze(observation)
+        observation =np.transpose(observation, (1,2,0))
+        converted_obs = observation_to_rgb(observation)
+        action = generate_action(model, converted_obs, is_procgen_env)
+        observation, reward, done, info = env.step(action)
+        # observation = colour_swap(observation)
+        total_reward += reward
+        observations.append(converted_obs)
+        count +=1
+        if count >= episode_timeout:
+            break
+    if save_gif:
+        imageio.mimsave(filepath, frames, fps=30)
+        print("Saved gif!")
+    return total_reward, frames, observations
+
+def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+    observations = []
+    observation = env.reset()
+    plot_single_observation(observation.squeeze().transpose(1,2,0))
+
+    done = False
+    total_reward = 0
+    frames=[]
+    activations = {}
+    # observation = colour_swap(observation)
+    count = 0
+    while not done:
+        if save_gif:
+            frames.append(env.render(mode='rgb_array'))
+        observation= np.squeeze(observation)
+        observation =np.transpose(observation, (1,2,0))
+        converted_obs = observation_to_rgb(observation)
+        action = generate_action_with_steering(model, converted_obs, steering_vector, is_procgen_env)
+        observation, reward, done, info = env.step(action)
+        total_reward += reward
+        observations.append(converted_obs)
+        count +=1
+        if count >= episode_timeout:
+            break
+    if save_gif:
+        imageio.mimsave(filepath, frames, fps=30)
+        print("Saved gif!")
+
+    return total_reward, frames, observations
+
