@@ -228,34 +228,7 @@ def create_venv(
     venv = wrap_venv(venv)
     return venv
     
-def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200):
 
-    observations = []
-    observation = env.reset()
-    done = False
-    total_reward = 0
-    frames=[]
-    
-    
-
-    # observation = colour_swap(observation)
-    count = 0
-    while not done:
-        if save_gif:
-            frames.append(env.render(mode='rgb_array'))  
-        action = generate_action(model, observation, is_procgen_env=False) 
-        
-        observation, reward, done, info = env.step(action)
-        total_reward += reward
-        observations.append(observation)
-        count +=1
-        if count >= episode_timeout:
-            break
-
-    if save_gif:
-        imageio.mimsave(filepath, frames, fps=30) 
-
-    return total_reward, frames, observations
 
 model = load_model()
 
