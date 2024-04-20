@@ -228,7 +228,7 @@ def create_venv(
     venv = wrap_venv(venv)
     return venv
     
-def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200):
+def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200, is_procgen_env=False):
 
     observations = []
     observation = env.reset()
