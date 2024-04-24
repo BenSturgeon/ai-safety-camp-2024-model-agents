@@ -336,32 +336,37 @@ def plot_confusion_matrix(conf_matrix, labels_dict):
     plt.title('Confusion Matrix Visualization')
     plt.show()
 
-def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200, is_procgen_env=True):
+
     observations = []
     observation = env.reset()
     done = False
     total_reward = 0
     frames=[]
-    activations = {}
+    
+    
+
     # observation = colour_swap(observation)
     count = 0
     while not done:
         if save_gif:
-            frames.append(env.render(mode='rgb_array'))
+            frames.append(env.render(mode='rgb_array'))  
+
         observation= np.squeeze(observation)
         observation =np.transpose(observation, (1,2,0))
         converted_obs = observation_to_rgb(observation)
-        action = generate_action(model, converted_obs, is_procgen_env)
+        
+        action = generate_action(model, converted_obs, is_procgen_env=is_procgen_env) 
         observation, reward, done, info = env.step(action)
-        # observation = colour_swap(observation)
         total_reward += reward
         observations.append(converted_obs)
         count +=1
         if count >= episode_timeout:
             break
+
     if save_gif:
-        imageio.mimsave(filepath, frames, fps=30)
-        print("Saved gif!")
+        imageio.mimsave(filepath, frames, fps=30) 
+
     return total_reward, frames, observations
 
 def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
@@ -382,6 +387,7 @@ def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filep
         observation =np.transpose(observation, (1,2,0))
         converted_obs = observation_to_rgb(observation)
         action = generate_action_with_steering(model, converted_obs, steering_vector, is_procgen_env)
+
         observation, reward, done, info = env.step(action)
         total_reward += reward
         observations.append(converted_obs)

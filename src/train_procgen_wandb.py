@@ -198,7 +198,7 @@ def run():
     configs = parse_args()
 
     # Initialize wandb
-    wandb.init(project='procgen_rl', config=configs, resume=True)
+    wandb.init(project='procgen_rl', config=configs, resume="True", id="vivid-feather")
 
     # Configure logger.
     log_dir = os.path.join(
