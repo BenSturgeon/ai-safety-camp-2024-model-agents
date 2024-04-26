@@ -19,7 +19,7 @@ import seaborn as sns
 import numpy as np
 import math
 import imageio
-
+import random
 
 from src.policies_impala import ImpalaCNN
 # from src.policies_modified import ImpalaCNN
@@ -169,6 +169,48 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
 
         plt.tight_layout()
         
+        # Save or show the plot
+        if save_filename_prefix:
+            save_filename = f"{save_filename_prefix}_{layer_name}.png"
+            plt.savefig(save_filename)
+            plt.close()
+        else:
+            plt.show()
+
+
+
+def plot_four_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
+    for layer_name in layer_paths:
+        # Check if the specified layer's activations are available
+        if layer_name not in activations:
+            print(f"No activations found for layer: {layer_name}")
+            continue
+
+        # Extract the activation tensor for the specified layer from the tuple
+        activation_tensor = activations[layer_name][0]
+
+        # The tensor is 3-dimensional [channels, height, width]
+        num_activations = activation_tensor.shape[0]  # Number of activation maps
+
+        # Select 4 random activation indices if there are at least 4 activations available
+        if num_activations >= 4:
+            selected_indices = random.sample(range(num_activations), 4)
+        else:
+            selected_indices = range(num_activations)
+
+        # We will plot only 4 activation maps
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))  # Always 2x2 grid for 4 plots
+        axes = axes.flatten()  # Flatten to simplify the indexing
+
+        # Plot each of the randomly selected activation maps
+        for idx, activation_idx in enumerate(selected_indices):
+            ax = axes[idx]
+            ax.imshow(activation_tensor[activation_idx, :, :], cmap='viridis', aspect='auto')
+            ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
+            ax.axis('off')  # Hide axes for a cleaner look
+
+        plt.tight_layout()
+
         # Save or show the plot
         if save_filename_prefix:
             save_filename = f"{save_filename_prefix}_{layer_name}.png"
