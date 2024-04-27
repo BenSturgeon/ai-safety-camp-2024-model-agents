@@ -558,7 +558,6 @@ def generate_action_with_steering(model, observation, steering_vector,steering_l
 
     # Register the steering hook to the 'hidden_fc' layer
     named_modules_dict = dict(model.named_modules())
-    print(named_modules_dict)
     hidden_fc_layer = named_modules_dict[steering_layer]
     steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
 
