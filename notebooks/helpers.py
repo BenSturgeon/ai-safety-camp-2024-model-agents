@@ -553,7 +553,7 @@ def generate_action_with_steering(model, observation, steering_vector,steering_l
     # Define the steering hook function
     def steering_hook(module, input, output):
         # Add the steering vector to the output activations
-        modified_output = output + steering_vector.unsqueeze(0)
+        modified_output = output - (steering_vector.unsqueeze(0) *10)
         return modified_output
 
     # Register the steering hook to the 'hidden_fc' layer
