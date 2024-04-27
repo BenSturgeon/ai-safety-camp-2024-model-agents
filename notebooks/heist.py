@@ -704,7 +704,7 @@ def create_gem_states(num_samples=5, num_levels=100):
 
 #     return dataset
 
-def create_classified_dataset(num_samples_per_category=5, num_levels=100):
+def create_classified_dataset(num_samples_per_category=5, num_levels=0):
     dataset = {
         "gem": [],
         "blue_key": [],

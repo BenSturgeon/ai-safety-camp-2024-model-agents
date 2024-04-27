@@ -9,6 +9,7 @@ from einops import rearrange
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.feature_selection import f_classif, f_regression
+from sklearn.metrics import accuracy_score, classification_report
 from sklearn import metrics
 from tqdm.auto import tqdm
 
@@ -205,3 +206,144 @@ def linear_probes_over_dim(
         random_state=random_state,
         **regression_kwargs,
     )
+
+
+def linear_probe_per_category(
+    activation_dataset,
+    layer_path,
+    model_type="classifier",
+    test_size=0.2,
+    random_state=None,
+    **regression_kwargs,
+):
+    category_results = {}
+
+    for category in activation_dataset.keys():
+        X_category = t.stack([act[layer_path][0] for act in activation_dataset[category]])
+        y_category = t.ones(len(activation_dataset[category])).long()
+
+        X_rest = t.cat([t.stack([act[layer_path][0] for act in activation_dataset[cat]])
+                            for cat in activation_dataset.keys() if cat != category])
+        y_rest = t.zeros(len(X_rest)).long()
+
+        X = t.cat([X_category, X_rest])
+        y = t.cat([y_category, y_rest])
+
+                # Split the data into train and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state
+        )
+
+        # Perform linear probing for the specific category
+        result = linear_probe(
+            X,
+            y,
+            model_type=model_type,
+            test_size=test_size,
+            random_state=random_state,
+            **regression_kwargs,
+        )
+        
+        category_results[category] = result
+                # Evaluate the accuracy on the test set
+        y_pred = result["model"].predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        result["test_accuracy"] = accuracy
+
+        category_results[category] = result
+
+    return category_results, result
+
+
+
+
+def linear_probe_per_category_using_probes(
+    activation_dataset,
+    layer_path,
+    model_type="classifier",
+    test_size=0.2,
+    random_state=None,
+    **regression_kwargs,
+):
+    results = []  # List to store results
+    category_names = []  # List to store category names for labeling purposes
+
+    # Function to perform linear probing
+    def linear_probes(xys, model_type, test_size, random_state, **kwargs):
+        local_results = []
+        for (X, y) in xys:
+            X_train, X_test, y_train, y_test = train_test_split(X.numpy(), y.numpy(), test_size=test_size, random_state=random_state)
+            if model_type == "classifier":
+                model = LogisticRegression(**kwargs)
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            accuracy = accuracy_score(y_test, y_pred)
+            report = classification_report(y_test, y_pred, output_dict=True)
+            local_results.append((accuracy, report))
+        return local_results
+
+    # Prepare the data pairs
+    for category in activation_dataset.keys():
+        X_category = t.stack([act[layer_path][0] for act in activation_dataset[category]])
+        y_category = t.ones(len(activation_dataset[category])).long()
+
+        X_rest = t.cat([t.stack([act[layer_path][0] for act in activation_dataset[cat]])
+                            for cat in activation_dataset.keys() if cat != category])
+        y_rest = t.zeros(len(X_rest)).long()
+
+        X = t.cat([X_category, X_rest])
+        y = t.cat([y_category, y_rest])
+
+        category_names.append(category)
+        results.append((X, y))
+
+    # Use linear_probes function to conduct the probing
+    probing_results = linear_probes(results, model_type=model_type, test_size=test_size, random_state=random_state, **regression_kwargs)
+
+    # Creating a DataFrame for clearer output
+    results_df = pd.DataFrame({
+        'category': category_names,
+        'test_accuracy': [result[0] for result in probing_results],
+        'classification_report': [result[1] for result in probing_results]
+        
+    })
+
+    return results_df
+
+
+
+def linear_probe_multiclass(
+    activation_dataset,
+    layer_path,
+    model_type="classifier",
+    test_size=0.2,
+    random_state=None,
+    **regression_kwargs,
+):
+    X = t.cat([t.stack([act[layer_path][0] for act in activation_dataset[category]])
+                   for category in activation_dataset.keys()])
+    y = t.cat([t.full((len(activation_dataset[category]),), i)
+                   for i, category in enumerate(activation_dataset.keys())]).long()
+
+    # Split the data into train and test sets
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+
+    # Perform linear probing for multi-class classification
+    result = linear_probe(
+        X_train,
+        y_train,
+        model_type=model_type,
+        test_size=test_size,
+        random_state=random_state,
+        **regression_kwargs,
+    )
+
+    # Evaluate the accuracy and classification metrics on the test set
+    y_pred = result["model"].predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    result["test_accuracy"] = accuracy
+    result["classification_report"] = classification_report(y_test, y_pred, target_names=list(activation_dataset.keys()))
+
+    return result

@@ -442,3 +442,27 @@ def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filep
 
     return total_reward, frames, observations
 
+def create_objective_activation_dataset(dataset, model, layer_paths):
+    activation_dataset = {
+        "gem": [],      
+        "blue_key": [],
+        "green_key": [],
+        "red_key": [],
+        "blue_lock": [],
+        "green_lock": [],
+        "red_lock": []
+    }
+
+    for category in dataset:
+        for obs in dataset[category]:
+            obs_rgb = observation_to_rgb(obs)
+            model_activations = ModelActivations(model)
+            print(obs_rgb.shape)
+            _, activations = model_activations.run_with_cache(obs_rgb, layer_paths)
+            model_activations.clear_hooks()
+
+
+            activation_dataset[category].append(activations)
+
+    return activation_dataset
+
