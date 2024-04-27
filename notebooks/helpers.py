@@ -86,35 +86,35 @@ def generate_action(model, observation, is_procgen_env=False):
         return np.array([action])
     return action
 
-@torch.no_grad()
-def generate_action_with_steering(model, observation, steering_vector, is_procgen_env=True):
-    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+# @torch.no_grad()
+# def generate_action_with_steering(model, observation, steering_vector, is_procgen_env=True):
+#     observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
 
-    # Define the steering hook function
-    def steering_hook(module, input, output):
-        # Add the steering vector to the output activations
-        modified_output = output + steering_vector.unsqueeze(0)
-        return modified_output
+#     # Define the steering hook function
+#     def steering_hook(module, input, output):
+#         # Add the steering vector to the output activations
+#         modified_output = output + steering_vector.unsqueeze(0)
+#         return modified_output
 
-    # Register the steering hook to the 'hidden_fc' layer
-    named_modules_dict = dict(model.named_modules())
-    hidden_fc_layer = named_modules_dict['hidden_fc']
-    steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
+#     # Register the steering hook to the 'hidden_fc' layer
+#     named_modules_dict = dict(model.named_modules())
+#     hidden_fc_layer = named_modules_dict['hidden_fc']
+#     steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
 
-    # Forward pass with steering
-    model_output = model(observation)
+#     # Forward pass with steering
+#     model_output = model(observation)
 
-    # Remove the steering hook
-    steering_handle.remove()
+#     # Remove the steering hook
+#     steering_handle.remove()
 
 
 
-    logits = model_output[0].logits  # discard the output of the critic in our actor critic network
-    probabilities = torch.softmax(logits, dim=-1)
-    action = torch.multinomial(probabilities, 1).item()
-    if is_procgen_env:
-        return np.array([action])
-    return action
+#     logits = model_output[0].logits  # discard the output of the critic in our actor critic network
+#     probabilities = torch.softmax(logits, dim=-1)
+#     action = torch.multinomial(probabilities, 1).item()
+#     if is_procgen_env:
+#         return np.array([action])
+#     return action
 
 def load_model(ImpalaCNN = ImpalaCNN, model_path ="../model_1400_latest.pt"):
     env_name = "procgen:procgen-heist-v0"  
@@ -358,6 +358,9 @@ def observation_to_rgb(observation):
 
     return rgb_image
 
+def tensor_to_image(tensor):
+    return tensor.squeeze().transpose(1,2,0)
+
 def rename_paths(paths):
     return [s.replace('.', '_') for s in paths]
 
@@ -411,7 +414,7 @@ def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif
 
     return total_reward, frames, observations
 
-def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, steering_layer, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
     observations = []
     observation = env.reset()
     # plot_single_observation(observation.squeeze().transpose(1,2,0))
@@ -428,7 +431,7 @@ def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, filep
         observation= np.squeeze(observation)
         observation =np.transpose(observation, (1,2,0))
         converted_obs = observation_to_rgb(observation)
-        action = generate_action_with_steering(model, converted_obs, steering_vector, is_procgen_env)
+        action = generate_action_with_steering(model, converted_obs, steering_vector, steering_layer, is_procgen_env)
 
         observation, reward, done, info = env.step(action)
         total_reward += reward
@@ -457,7 +460,6 @@ def create_objective_activation_dataset(dataset, model, layer_paths):
         for obs in dataset[category]:
             obs_rgb = observation_to_rgb(obs)
             model_activations = ModelActivations(model)
-            print(obs_rgb.shape)
             _, activations = model_activations.run_with_cache(obs_rgb, layer_paths)
             model_activations.clear_hooks()
 
@@ -466,3 +468,138 @@ def create_objective_activation_dataset(dataset, model, layer_paths):
 
     return activation_dataset
 
+class ModelActivations:
+    def __init__(self, model):
+        self.activations = {}
+        self.model = model
+        self.hooks = []  # To keep track of hooks
+
+    def clear_hooks(self):
+        # Remove all previously registered hooks
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+        self.activations = {}
+
+    def get_activation(self, name):
+        def hook(model, input, output):
+            processed_output = []
+            for item in output:
+                if isinstance(item, torch.Tensor):
+                    processed_output.append(item.detach())
+                elif isinstance(item, torch.distributions.Categorical):
+                    processed_output.append(item.logits.detach())
+                else:
+                    processed_output.append(item)
+            self.activations[name] = tuple(processed_output)
+        return hook
+
+    def register_hook_by_path(self, path, name):
+        elements = path.split('.')
+        model = self.model
+        for i, element in enumerate(elements):
+            if '[' in element:
+                base, index = element.replace(']', '').split('[')
+                index = int(index)
+                model = getattr(model, base)[index]
+            else:
+                model = getattr(model, element)
+            if i == len(elements) - 1:
+                hook = model.register_forward_hook(self.get_activation(name))
+                self.hooks.append(hook)  # Keep track of the hook
+
+    def run_with_cache(self, input, layer_paths):
+        self.clear_hooks()  # Clear any existing hooks
+        self.activations = {}  # Reset activations
+
+        # Handle edge case: input is not a tensor
+        if not isinstance(input, torch.Tensor):
+            input = torch.tensor(input, dtype=torch.float32)
+
+
+        # Check the shape of the input and reshape if necessary
+        if input.shape == torch.Size([1, 3, 64, 64]):
+            input = input.squeeze(0)  # Remove the batch dimension
+        if input.shape == torch.Size([3, 64, 64]):
+            input = input.permute(1, 2, 0)  # Switch dimensions to (64, 64, 3)
+
+
+        # Handle edge case: empty layer_paths
+        if not layer_paths:
+            output = self.model(input)
+            return output, self.activations
+
+        # Register hooks for each layer path
+        for path in layer_paths:
+            try:
+                self.register_hook_by_path(path, path.replace('.', '_'))
+            except AttributeError:
+                print(f"Warning: Layer '{path}' not found in the model. Skipping hook registration.")
+
+        # Add batch dimension if missing
+        if input.dim() == 3:
+            input = input.unsqueeze(0)
+
+        # Run the model with the registered hooks
+        output = self.model(input)
+
+        return output, self.activations
+    
+
+@torch.no_grad()
+def generate_action_with_steering(model, observation, steering_vector,steering_layer, is_procgen_env=False):
+    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+    
+    # Define the steering hook function
+    def steering_hook(module, input, output):
+        # Add the steering vector to the output activations
+        modified_output = output + steering_vector.unsqueeze(0)
+        return modified_output
+
+    # Register the steering hook to the 'hidden_fc' layer
+    named_modules_dict = dict(model.named_modules())
+    print(named_modules_dict)
+    hidden_fc_layer = named_modules_dict[steering_layer]
+    steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
+
+    # Forward pass with steering
+    model_output = model(observation)
+
+    # Remove the steering hook
+    steering_handle.remove()
+
+    logits = model_output[0].logits  # discard the output of the critic in our actor critic network
+    probabilities = torch.softmax(logits, dim=-1)
+    action = torch.multinomial(probabilities, 1).item()
+
+    if is_procgen_env:
+        return np.array([action])
+    return action
+
+# def run_episode_with_steering_and_save_as_gif(env, model, steering_vector,steering_layer, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200, is_procgen_env=True):
+#     observations = []
+#     observation = env.reset()
+#     done = False
+#     total_reward = 0
+#     frames = []
+#     count = 0
+
+#     while not done:
+#         if save_gif:
+#             frames.append(env.render(mode='rgb_array'))
+
+#         action = generate_action_with_steering(model, observation, steering_vector, steering_layer, is_procgen_env=is_procgen_env)
+
+#         # Perform inference with the model one step
+#         observation, reward, done, info = env.step(action)
+#         total_reward += reward
+#         observations.append(observation)
+#         count += 1
+
+#         if count >= episode_timeout:
+#             break
+
+#     if save_gif:
+#         imageio.mimsave(filepath, frames, fps=30)
+
+#     return total_reward, frames, observations

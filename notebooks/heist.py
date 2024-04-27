@@ -430,10 +430,8 @@ class EnvState:
     
     def remove_gem(self):
         state_values = self.state_vals
-        for ents in state_values["ents"]:
-            if ents["image_type"] == 9:
-                ents["x"].val = -1
-                ents["y"].val = -1
+        state_values["ents"][2]["x"].val = -1
+        state_values["ents"][2]["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
     def delete_specific_keys_and_locks(self, colors_to_delete):
