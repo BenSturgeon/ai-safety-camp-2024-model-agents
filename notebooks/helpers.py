@@ -414,7 +414,7 @@ def run_episode_and_save_as_gif(env, model, filepath='../gifs/run.gif', save_gif
 
     return total_reward, frames, observations
 
-def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, steering_layer, filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, steering_layer, modification_value,filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
     observations = []
     observation = env.reset()
     # plot_single_observation(observation.squeeze().transpose(1,2,0))
@@ -431,7 +431,7 @@ def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, steer
         observation= np.squeeze(observation)
         observation =np.transpose(observation, (1,2,0))
         converted_obs = observation_to_rgb(observation)
-        action = generate_action_with_steering(model, converted_obs, steering_vector, steering_layer, is_procgen_env)
+        action = generate_action_with_steering(model, converted_obs, steering_vector, steering_layer,modification_value, is_procgen_env)
 
         observation, reward, done, info = env.step(action)
         total_reward += reward
@@ -547,13 +547,13 @@ class ModelActivations:
     
 
 @torch.no_grad()
-def generate_action_with_steering(model, observation, steering_vector,steering_layer, is_procgen_env=False):
+def generate_action_with_steering(model, observation, steering_vector,steering_layer, modification_value, is_procgen_env=False):
     observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
     
     # Define the steering hook function
     def steering_hook(module, input, output):
         # Add the steering vector to the output activations
-        modified_output = output - (steering_vector.unsqueeze(0) *10)
+        modified_output = output + (steering_vector.unsqueeze(0) * modification_value)
         return modified_output
 
     # Register the steering hook to the 'hidden_fc' layer
