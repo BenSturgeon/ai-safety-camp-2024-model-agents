@@ -175,10 +175,7 @@ StateValues = typing.Dict[
 
 Square = typing.Tuple[int, int]
 
-def create_venv(num=1, start_level=100, num_levels=200):
-    env_name = "procgen:procgen-heist-v0"  
-    env = gym.make(env_name, start_level=start_level, num_levels=num_levels, render_mode="rgb_array", distribution_mode="easy") #remove render mode argument to go faster but not produce images 
-    return env
+
 
 
 
@@ -220,7 +217,7 @@ def create_venv(
         num=num,
         env_name="heist",
         num_levels=num_levels,
-        start_level=100,
+        start_level=start_level,
         distribution_mode="easy",
         num_threads=num_threads,
         render_mode="rgb_array",
@@ -429,9 +426,11 @@ class EnvState:
         self.state_bytes = _serialize_maze_state(state_values)
     
     def remove_gem(self):
-        state_values = self.state_vals
-        state_values["ents"][2]["x"].val = -1
-        state_values["ents"][2]["y"].val = -1
+        state_values = self.state_vals  
+        for ents in state_values["ents"]:
+            if ents["image_type"].val== 9:
+                ents["x"].val = -1
+                ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
     def delete_specific_keys_and_locks(self, colors_to_delete):
