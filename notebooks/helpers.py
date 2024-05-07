@@ -364,6 +364,8 @@ def tensor_to_image(tensor):
 def rename_paths(paths):
     return [s.replace('.', '_') for s in paths]
 
+def rename_path(path):
+    return path.replace('.', '_') 
 
 def plot_confusion_matrix(conf_matrix, labels_dict):
     # Define the size of the figure
@@ -545,6 +547,8 @@ class ModelActivations:
 
         return output, self.activations
     
+
+
 
 @torch.no_grad()
 def generate_action_with_steering(model, observation, steering_vector,steering_layer, modification_value, is_procgen_env=False):
