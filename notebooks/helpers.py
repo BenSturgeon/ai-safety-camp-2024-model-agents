@@ -579,30 +579,18 @@ def generate_action_with_steering(model, observation, steering_vector,steering_l
         return np.array([action])
     return action
 
-# def run_episode_with_steering_and_save_as_gif(env, model, steering_vector,steering_layer, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200, is_procgen_env=True):
-#     observations = []
-#     observation = env.reset()
-#     done = False
-#     total_reward = 0
-#     frames = []
-#     count = 0
+def create_activation_dataset(dataset, model, layer_paths, categories):
+    activation_dataset = categories
 
-#     while not done:
-#         if save_gif:
-#             frames.append(env.render(mode='rgb_array'))
+    for category in dataset:
+        for obs in dataset[category]:
+            obs_rgb = observation_to_rgb(obs)
+            model_activations = ModelActivations(model)
+            _, activations = model_activations.run_with_cache(obs_rgb, layer_paths)
+            model_activations.clear_hooks()
 
-#         action = generate_action_with_steering(model, observation, steering_vector, steering_layer, is_procgen_env=is_procgen_env)
 
-#         # Perform inference with the model one step
-#         observation, reward, done, info = env.step(action)
-#         total_reward += reward
-#         observations.append(observation)
-#         count += 1
+            activation_dataset[category].append(activations)
 
-#         if count >= episode_timeout:
-#             break
+    return activation_dataset
 
-#     if save_gif:
-#         imageio.mimsave(filepath, frames, fps=30)
-
-#     return total_reward, frames, observations
