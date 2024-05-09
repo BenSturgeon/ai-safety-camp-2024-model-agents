@@ -579,30 +579,59 @@ def generate_action_with_steering(model, observation, steering_vector,steering_l
         return np.array([action])
     return action
 
-# def run_episode_with_steering_and_save_as_gif(env, model, steering_vector,steering_layer, filepath='../gifs/run.gif', save_gif=False, episode_timeout=200, is_procgen_env=True):
-#     observations = []
-#     observation = env.reset()
-#     done = False
-#     total_reward = 0
-#     frames = []
-#     count = 0
+def create_activation_dataset(dataset, model, layer_paths, categories):
+    activation_dataset = categories
 
-#     while not done:
-#         if save_gif:
-#             frames.append(env.render(mode='rgb_array'))
+    for category in dataset:
+        for obs in dataset[category]:
+            obs_rgb = observation_to_rgb(obs)
+            model_activations = ModelActivations(model)
+            _, activations = model_activations.run_with_cache(obs_rgb, layer_paths)
+            model_activations.clear_hooks()
 
-#         action = generate_action_with_steering(model, observation, steering_vector, steering_layer, is_procgen_env=is_procgen_env)
 
-#         # Perform inference with the model one step
-#         observation, reward, done, info = env.step(action)
-#         total_reward += reward
-#         observations.append(observation)
-#         count += 1
+            activation_dataset[category].append(activations)
 
-#         if count >= episode_timeout:
-#             break
+    return activation_dataset
 
-#     if save_gif:
-#         imageio.mimsave(filepath, frames, fps=30)
+def create_steering_vector_dataset(model_path, layer_number, num_samples=100, num_levels=1, start_level=5, episode_timeout=200):
+    dataset = []
+    model = helpers.load_model(model_path=model_path)
+    layer_names = helpers.get_model_layer_names(model)
+    steering_layer_unchanged = ordered_layer_names[layer_number]
+    steering_layer = helpers.rename_path(steering_layer_unchanged)
+    model_activations = helpers.ModelActivations(model)
 
-#     return total_reward, frames, observations
+    while len(dataset) < num_samples:
+        start_level = random.randint(1, 10000)
+        venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+        state = heist.state_from_venv(venv, 0)
+        unchanged_obs = venv.reset()
+        state_values = state.state_vals
+
+        gem_found = False
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 9:
+                gem_x = ents["x"].val
+                gem_y = ents["y"].val
+                gem_found = True
+                break
+
+        if gem_found:
+            state.remove_gem()
+            state_bytes = state.state_bytes
+            if state_bytes is not None:
+                venv.env.callmethod("set_state", [state_bytes])
+                modified_obs = venv.reset()
+
+                model_activations.clear_hooks()
+                output1, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(unchanged_obs), layer_names)
+                model_activations.clear_hooks()
+                output2, modified_obs_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), layer_names)
+
+                steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
+                dataset.append(steering_vector)
+
+        venv.close()
+
+    return dataset
