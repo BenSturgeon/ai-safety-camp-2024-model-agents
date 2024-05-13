@@ -433,11 +433,58 @@ class EnvState:
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
+    def remove_mouse(self):
+        state_values = self.state_vals
+        state_values["ents"][0]["x"].val = -1
+        state_values["ents"][0]["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
     def delete_specific_keys_and_locks(self, colors_to_delete):
         state_values = self.state_vals
         for ents in state_values["ents"]:
             if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
                 if ents["image_theme"].val in [KEY_COLORS[color] for color in colors_to_delete]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_specific_keys(self, colors_to_delete):
+        KEY_COLORS = {"blue": 0, "green": 1, "red": 2}
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [2]:  # Check if the entity is a key or lock
+                if ents["image_theme"].val in [KEY_COLORS[color] for color in colors_to_delete]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_specific_locks(self, colors_to_delete):
+        KEY_COLORS = {"blue": 0, "green": 1, "red": 2}
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1]:  # Check if the entity is a key or lock
+                if ents["image_theme"].val in [KEY_COLORS[color] for color in colors_to_delete]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys_and_locks(self, stage):
+
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+                if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+                elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
