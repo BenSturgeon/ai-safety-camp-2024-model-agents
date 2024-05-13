@@ -1,5 +1,5 @@
-import torch
 import torch.nn as nn
+import torch
 import imageio
 
 import sys
@@ -24,6 +24,43 @@ import random
 from src.policies_impala import ImpalaCNN
 # from src.policies_modified import ImpalaCNN
 from src.visualisation_functions import *
+
+import heist
+
+ordered_layer_names = {
+ 0: 'conv_seqs',
+ 1: 'conv_seqs.0',
+ 2: 'conv_seqs.0.conv',
+ 3: 'conv_seqs.0.max_pool2d',
+ 4: 'conv_seqs.0.res_block0',
+ 5: 'conv_seqs.0.res_block0.conv0',
+ 6: 'conv_seqs.0.res_block0.conv1',
+ 7: 'conv_seqs.0.res_block1',
+ 8: 'conv_seqs.0.res_block1.conv0',
+ 9: 'conv_seqs.0.res_block1.conv1',
+ 10: 'conv_seqs.1',
+ 11: 'conv_seqs.1.conv',
+ 12: 'conv_seqs.1.max_pool2d',
+ 13: 'conv_seqs.1.res_block0',
+ 14: 'conv_seqs.1.res_block0.conv0',
+ 15: 'conv_seqs.1.res_block0.conv1',
+ 16: 'conv_seqs.1.res_block1',
+ 17: 'conv_seqs.1.res_block1.conv0',
+ 18: 'conv_seqs.1.res_block1.conv1',
+ 19: 'conv_seqs.2',
+ 20: 'conv_seqs.2.conv',
+ 21: 'conv_seqs.2.max_pool2d',
+ 22: 'conv_seqs.2.res_block0',
+ 23: 'conv_seqs.2.res_block0.conv0',
+ 24: 'conv_seqs.2.res_block0.conv1',
+ 25: 'conv_seqs.2.res_block1',
+ 26: 'conv_seqs.2.res_block1.conv0',
+ 27: 'conv_seqs.2.res_block1.conv1',
+ 28: 'hidden_fc',
+ 29: 'logits_fc',
+ 30: 'value_fc'
+}
+
 
 class ModelActivations:
     def __init__(self, model):
@@ -594,3 +631,58 @@ def create_activation_dataset(dataset, model, layer_paths, categories):
 
     return activation_dataset
 
+def run_gem_steering_experiment(model_path, layer_number, modification_value, num_levels=1, start_level=5, episode_timeout=200, save_gif=False, gif_filepath="steering_gif.gif"):
+    start_level = random.randint(1, 10000)
+    venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+    state = heist.state_from_venv(venv, 0)
+    unchanged_obs = venv.reset()
+
+
+
+    unchanged_obs= venv.reset()
+    state_values = state.state_vals
+
+    for ents in state_values["ents"]:
+        if ents["image_type"].val== 9:
+            gem_x = ents["x"].val 
+            gem_y = ents["y"].val 
+
+    state.remove_gem()
+
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        modified_obs = venv.reset()
+
+    state = heist.state_from_venv(venv, 0)
+
+    state.set_gem_position(gem_y-.5,gem_x-.5)
+
+    state_bytes = state.state_bytes
+
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+    # Load model and calculate steering vector
+    model = load_model(model_path=model_path)
+    layer_names = get_model_layer_names(model)
+    steering_layer_unchanged = ordered_layer_names[layer_number]
+    steering_layer = rename_path(steering_layer_unchanged)
+
+    model_activations = ModelActivations(model)
+    model_activations.clear_hooks()
+    output1, unmodified_activations = model_activations.run_with_cache(observation_to_rgb(unchanged_obs), layer_names)
+    model_activations.clear_hooks()
+    output2, modified_obs_activations = model_activations.run_with_cache(observation_to_rgb(modified_obs), layer_names)
+
+    steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
+
+
+    # Run episode with steering
+    total_reward_steering, frames_steering, observations_steering = run_episode_with_steering_and_save_as_gif(
+        venv, model, steering_vector, steering_layer=ordered_layer_names[layer_number],
+        modification_value=modification_value, filepath=gif_filepath,
+        save_gif=save_gif, episode_timeout=episode_timeout
+    )
+
+    return total_reward_steering
