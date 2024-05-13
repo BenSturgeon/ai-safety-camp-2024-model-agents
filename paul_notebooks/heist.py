@@ -362,6 +362,16 @@ class EnvState:
         
         return key_colors
 
+    def get_key_position(self, key_index):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val== 2:
+                if key_index == ents["image_theme"].val:
+                    x = ents["x"].val 
+                    y = ents["y"].val 
+                    return (x,y)
+                    
+        raise ValueError("No key found!")
 
     def set_key_position(self, key_index, x, y):
         state_values = self.state_vals
@@ -424,6 +434,7 @@ class EnvState:
             ents["x"].val = -1
             ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+
     
     def remove_gem(self):
         state_values = self.state_vals  
@@ -476,18 +487,32 @@ class EnvState:
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
-    def delete_keys_and_locks(self, stage):
-
+    def delete_keys_and_locks(self):
         state_values = self.state_vals
         for ents in state_values["ents"]:
-            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
-                if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
-                elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
+            if ents["image_type"].val in [1,2]:  # Check if the entity is a key or lock
+                ents["x"].val = -1
+                ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+        # state_values = self.state_vals
+        # for ents in state_values["ents"]:
+        #     if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+        #         if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
+        #             ents["x"].val = -1
+        #             ents["y"].val = -1
+        #         elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
+        #             ents["x"].val = -1
+        #             ents["y"].val = -1
+        # self.state_bytes = _serialize_maze_state(state_values)
+
+    
+    def get_keys(self):
+        positions = []
+        for ents in state_values["ents"]:
+            if ents["image_type"].val== 2:
+                print(ents)
+                positions.append({"x" :ents["x"].val, "y" :ents["y"].val, "alpha" : ents["alpha"].val})
+        return positions
 
 
             
