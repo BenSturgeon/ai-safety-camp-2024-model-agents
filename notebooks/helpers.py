@@ -484,6 +484,48 @@ def run_episode_with_steering_and_save_as_gif(env, model, steering_vector, steer
 
     return total_reward, frames, observations
 
+
+
+def run_episode_with_steering_and_check_target_acquisition(env, model, steering_vector, steering_layer, modification_value,filepath='../gifs/run.gif', save_gif=False, episode_timeout=400, is_procgen_env=True):
+    observations = []
+    observation = env.reset()
+
+    done = False
+    total_reward = 0
+    frames=[]
+    activations = {}
+    state = heist.state_from_venv(env, 0)
+
+    lock_positions_before = heist.get_lock_positions(state)
+    num_changes_expected = len(lock_positions_before)
+    num_changes_counted = 0
+    count = 0
+    while not done:
+        if save_gif:
+            frames.append(env.render(mode='rgb_array'))
+        observation= np.squeeze(observation)
+        observation =np.transpose(observation, (1,2,0))
+        converted_obs = observation_to_rgb(observation)
+        action = generate_action_with_steering(model, converted_obs, steering_vector, steering_layer,modification_value, is_procgen_env)
+
+        observation, reward, done, info = env.step(action)
+
+        lock_positions_after = get_lock_positions(heist.state_from_venv(env, 0))
+        if lock_positions_before != lock_positions_after:
+            num_changes_counted +=1
+        total_reward += reward
+        observations.append(converted_obs)
+        count +=1
+        if count >= episode_timeout:
+            break
+    if save_gif:
+        imageio.mimsave(filepath, frames, fps=30)
+        print("Saved gif!")
+
+    if num_changes_counted == num_changes_expected and total_reward == 0: return True
+    else: return False
+
+
 def create_objective_activation_dataset(dataset, model, layer_paths):
     activation_dataset = {
         "gem": [],      

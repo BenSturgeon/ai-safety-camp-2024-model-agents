@@ -162,7 +162,6 @@ HEIST_STATE_DICT_TEMPLATE = [
 ]
 
 
-
 @dataclass
 class StateValue:
     val: typing.Any
@@ -441,6 +440,23 @@ class EnvState:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+    
+def get_lock_positions(state_vals):
+    lock_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 1:  # Check if the entity is a lock
+            lock_positions.append((ents["x"].val, ents["y"].val))
+
+    return lock_positions
+
+def get_lock_statuses(state_vals):
+    lock_statuses = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 1:  # Check if the entity is a lock
+            lock_statuses.append(ents)
+    return lock_statuses
+    
+    
 
 
             
@@ -522,8 +538,6 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
         idx = parse_value(vals, val_def, idx)
 
 
-
-
     if assert_:
         assert (
             _serialize_maze_state(vals, assert_=False) == state_bytes
@@ -566,7 +580,6 @@ def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
             _parse_maze_state_bytes(state_bytes, assert_=False) == state_vals
         ), "deserialize(serialize(state_vals)) != state_vals"
     return state_bytes
-
 
 
 
@@ -664,42 +677,6 @@ def create_gem_states(num_samples=5, num_levels=100):
 
     return observations_list
 
-# def create_classified_dataset(num_samples_per_category=5, num_levels=100):
-#     dataset = {
-#         "gem": [],
-#         "blue_key": [],
-#         "green_key": [],
-#         "red_key": []
-#     }
-
-#     while any(len(samples) < num_samples_per_category for samples in dataset.values()):
-#         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
-#         state = state_from_venv(venv, 0)
-#         key_colors = state.get_key_colors()
-
-#         if not key_colors:
-#             if len(dataset["gem"]) < num_samples_per_category:
-#                 obs = venv.reset()
-#                 dataset["gem"].append(obs[0].transpose(1,2,0))
-#         else:
-#             for color in key_colors:
-#                 if len(dataset[f"{color}_key"]) < num_samples_per_category:
-#                     if color == "blue":
-#                         state.delete_specific_keys_and_locks([])
-#                     elif color == "green":
-#                         state.delete_specific_keys_and_locks([0])
-#                     elif color == "red":
-#                         state.delete_specific_keys_and_locks([0, 1])
-
-#                     state_bytes = state.state_bytes
-#                     if state_bytes is not None:
-#                         venv.env.callmethod("set_state", [state_bytes])
-#                         obs = venv.reset()
-#                         dataset[f"{color}_key"].append(obs[0].transpose(1,2,0))
-
-#         venv.close()
-
-#     return dataset
 
 def create_classified_dataset(num_samples_per_category=5, num_levels=0):
     dataset = {
