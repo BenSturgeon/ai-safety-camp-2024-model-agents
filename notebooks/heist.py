@@ -201,7 +201,7 @@ def wrap_venv(venv) -> ToBaselinesVecEnv:
     return venv  
 
 def create_venv(
-    num: int, start_level: int, num_levels: int, num_threads: int = 1
+    num: int, start_level: int, num_levels: int, num_threads: int = 1, distribution_mode: str = "easy"
 ):
     """
     Create a wrapped venv. See https://github.com/openai/procgen#environment-options for params
@@ -217,7 +217,7 @@ def create_venv(
         env_name="heist",
         num_levels=num_levels,
         start_level=start_level,
-        distribution_mode="easy",
+        distribution_mode=distribution_mode,
         num_threads=num_threads,
         render_mode="rgb_array",
     )
@@ -800,6 +800,31 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
                         venv.env.callmethod("set_state", [state_bytes])
                         obs = venv.reset()
                         dataset["blue_lock"].append(obs[0].transpose(1,2,0))
+
+        venv.close()
+
+    return dataset
+
+def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0):
+    dataset = {
+        "empty_maze": []
+    }
+
+    key_indices = {"blue": 0, "green": 1, "red": 2}
+
+    
+
+    while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        state = state_from_venv(venv, 0)
+
+        state.remove_all_entities()
+        state_bytes = state.state_bytes
+        if state_bytes is not None:
+            venv.env.callmethod("set_state", [state_bytes])
+            obs = venv.reset()
+            dataset["empty_maze"].append(obs[0].transpose(1,2,0))
+
 
         venv.close()
 

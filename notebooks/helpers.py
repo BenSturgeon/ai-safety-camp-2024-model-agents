@@ -15,6 +15,8 @@ import torch
 
 
 import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import seaborn as sns
 import numpy as np
 import math
@@ -213,6 +215,63 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
             plt.close()
         else:
             plt.show()
+
+def plot_activations_for_layers_rb_max(activations, layer_paths, save_filename_prefix=None, plot_scale_max=5):
+    plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
+
+    for layer_name in layer_paths:
+        if layer_name not in activations:
+            print(f"No activations found for layer: {layer_name}")
+            continue
+
+        # Extract the activation tensor for the specified layer from the tuple
+        if isinstance(activations[layer_name], tuple):
+            activation_tensor = activations[layer_name][0]
+        else:
+            activation_tensor = activations[layer_name]
+        num_activations = activation_tensor.shape[0]
+        grid_size = math.ceil(math.sqrt(num_activations))
+
+        # Create a figure with GridSpec to manage space between image and color bar
+        fig = plt.figure(figsize=(grid_size * 2.5, grid_size * 2))  # Adjust figure size to better accommodate color bars
+        gs = gridspec.GridSpec(grid_size, grid_size, width_ratios=[1]*grid_size, height_ratios=[1]*grid_size)
+
+        activation_idx = 0
+        for i in range(grid_size):
+            for j in range(grid_size):
+                ax = fig.add_subplot(gs[i, j])
+                if activation_idx < num_activations:
+                    if activation_tensor.ndim == 3:  # Typical for conv layers
+                        data = activation_tensor[activation_idx, :, :]
+                    # elif activation_tensor.ndim == 2:  # Typical for flattened or dense layers
+                    #     data = np.tile(activation_tensor[activation_idx, :], (10, 1))  # Expand vertically
+                    # elif activation_tensor.ndim == 1:  # Directly dense layer, rare case
+                    #     data = np.tile(activation_tensor[:, np.newaxis], (1, 10))  # Expand horizontally
+                    else:
+                        raise ValueError(f"Unsupported tensor dimension {activation_tensor.ndim}: must be 3")
+
+                    im = ax.imshow(data, aspect='auto', vmin=-plot_scale_max, vmax=plot_scale_max)
+                    ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
+
+                    # Create a new axis for the color bar next to the current axis
+                    divider = make_axes_locatable(ax)
+                    cax = divider.append_axes("right", size="5%", pad=0.05)
+                    fig.colorbar(im, cax=cax)
+
+                    activation_idx += 1
+                else:
+                    ax.axis('off')
+                ax.axis('off')  # Maintain a clean look by hiding axis ticks and labels
+
+        plt.tight_layout()
+
+        if save_filename_prefix:
+            save_filename = f"{save_filename_prefix}_{layer_name}.png"
+            plt.savefig(save_filename)
+            plt.close()
+        else:
+            plt.show()
+
 
 
 

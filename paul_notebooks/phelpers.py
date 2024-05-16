@@ -131,188 +131,7 @@ def get_model_layer_names(model):
     layer_names = [name for name, _ in model.named_modules() if isinstance(_, nn.Module)]
     return layer_names[1:len(layer_names)]
 
-def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
-    for layer_name in layer_paths:
-        # Check if the specified layer's activations are available
-        if layer_name not in activations:
-            print(f"No activations found for layer: {layer_name}")
-            continue
 
-        # Extract the activation tensor for the specified layer from the tuple
-        activation_tensor = activations[layer_name][0]
-
-        # The tensor is 3-dimensional [channels, height, width]
-        num_activations = activation_tensor.shape[0]  # Number of activation maps
-        
-        # Calculate grid size
-        grid_size = math.ceil(math.sqrt(num_activations))
-        
-        # Create a figure with dynamic subplots based on the number of activations
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2))
-        if grid_size == 1:
-            axes = np.array([[axes]])  # Ensure axes can be indexed with two dimensions
-
-        # Initialize an index for activation maps
-        activation_idx = 0
-
-        for i in range(grid_size):
-            for j in range(grid_size):
-                ax = axes[i, j]
-                
-                # Plot the activation map if we haven't gone through all of them yet
-                if activation_idx < num_activations:
-                    ax.imshow(activation_tensor[activation_idx, :, :], cmap='viridis', aspect='auto')
-                    ax.set_title(f'Filter {activation_idx+1} {layer_name}', fontsize=8)
-                    activation_idx += 1
-                else:
-                    ax.axis('off')  # Hide axes without data
-                
-                ax.axis('off')  # Hide axes for all plots for a cleaner look
-        # Set the default colormap
-        plt.tight_layout()
-        
-        # Save or show the plot
-        if save_filename_prefix:
-            save_filename = f"{save_filename_prefix}_{layer_name}.png"
-            plt.savefig(save_filename)
-            plt.close()
-        else:
-            plt.rcParams['image.cmap'] = 'RdBu'
-            # plt.colorbar()  # show the color bar
-            plt.show()
-
-def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
-    plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the default colormap to 'RdBu' for all plots
-
-    for layer_name in layer_paths:
-        if layer_name not in activations:
-            print(f"No activations found for layer: {layer_name}")
-            continue
-
-        activation_tensor = activations[layer_name][0]
-        num_activations = activation_tensor.shape[0]
-        grid_size = math.ceil(math.sqrt(num_activations))
-        
-        fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2))
-        if grid_size == 1:
-            axes = np.array([[axes]])
-
-        activation_idx = 0
-        for i in range(grid_size):
-            for j in range(grid_size):
-                ax = axes[i, j]
-                if activation_idx < num_activations:
-                    im = ax.imshow(activation_tensor[activation_idx, :, :], aspect='auto')
-                    ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
-                    fig.colorbar(im, ax=ax)  # Add a color bar to each subplot
-                    activation_idx += 1
-                else:
-                    ax.axis('off')
-                ax.axis('off')
-
-        plt.tight_layout()
-
-        if save_filename_prefix:
-            save_filename = f"{save_filename_prefix}_{layer_name}.png"
-            plt.savefig(save_filename)
-            plt.close()
-        else:
-            plt.show()
-
-def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
-    plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
-
-    for layer_name in layer_paths:
-        if layer_name not in activations:
-            print(f"No activations found for layer: {layer_name}")
-            continue
-
-        activation_tensor = activations[layer_name][0]
-        num_activations = activation_tensor.shape[0]
-        grid_size = math.ceil(math.sqrt(num_activations))
-
-        # Create a figure with GridSpec to manage space between image and color bar
-        fig = plt.figure(figsize=(grid_size * 2.5, grid_size * 2))  # Adjust figure size to better accommodate color bars
-        gs = gridspec.GridSpec(grid_size, grid_size, width_ratios=[1]*grid_size, height_ratios=[1]*grid_size)
-
-        activation_idx = 0
-        for i in range(grid_size):
-            for j in range(grid_size):
-                ax = fig.add_subplot(gs[i, j])
-                if activation_idx < num_activations:
-                    im = ax.imshow(activation_tensor[activation_idx, :, :], aspect='auto')
-                    ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
-
-                    # Create a new axis for the color bar next to the current axis
-                    divider = make_axes_locatable(ax)
-                    cax = divider.append_axes("right", size="5%", pad=0.05)
-                    fig.colorbar(im, cax=cax)
-
-                    activation_idx += 1
-                else:
-                    ax.axis('off')
-                ax.axis('off')  # Maintain a clean look by hiding axis ticks and labels
-
-        plt.tight_layout()
-
-        if save_filename_prefix:
-            save_filename = f"{save_filename_prefix}_{layer_name}.png"
-            plt.savefig(save_filename)
-            plt.close()
-        else:
-            plt.show()
-def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None, plot_scale_max = 1):
-    plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
-
-    for layer_name in layer_paths:
-        if layer_name not in activations:
-            print(f"No activations found for layer: {layer_name}")
-            continue
-
-        activation_tensor = activations[layer_name][0]
-        num_activations = activation_tensor.shape[0]
-        grid_size = math.ceil(math.sqrt(num_activations))
-
-        # Create a figure with GridSpec to manage space between image and color bar
-        fig = plt.figure(figsize=(grid_size * 2.5, grid_size * 2))  # Adjust figure size to better accommodate color bars
-        gs = gridspec.GridSpec(grid_size, grid_size, width_ratios=[1]*grid_size, height_ratios=[1]*grid_size)
-
-        activation_idx = 0
-        for i in range(grid_size):
-            for j in range(grid_size):
-                ax = fig.add_subplot(gs[i, j])
-                if activation_idx < num_activations:
-                    # Set the color scale from -5 to 5 using vmin and vmax
-                    if activation_tensor.ndim == 3:
-                        im = ax.imshow(activation_tensor[activation_idx, :, :], aspect='auto', vmin=-plot_scale_max, vmax=plot_scale_max)
-                    elif activation_tensor.ndim == 2:
-                        im = ax.imshow(activation_tensor[activation_idx, :], aspect='auto')
-                    elif activation_tensor.ndim == 1:
-                        im = ax.imshow(activation_tensor[:], aspect='auto')
-                    else:
-                        raise ValueError(f"Activation tensor dim = {activation_tensor.ndim}, not 1, 2 or 3")
-
-
-                    ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
-
-                    # Create a new axis for the color bar next to the current axis
-                    divider = make_axes_locatable(ax)
-                    cax = divider.append_axes("right", size="5%", pad=0.05)
-                    fig.colorbar(im, cax=cax)
-
-                    activation_idx += 1
-                else:
-                    ax.axis('off')
-                ax.axis('off')  # Maintain a clean look by hiding axis ticks and labels
-
-        plt.tight_layout()
-
-        if save_filename_prefix:
-            save_filename = f"{save_filename_prefix}_{layer_name}.png"
-            plt.savefig(save_filename)
-            plt.close()
-        else:
-            plt.show()
 def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None, plot_scale_max=5):
     plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
 
@@ -321,7 +140,11 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
             print(f"No activations found for layer: {layer_name}")
             continue
 
-        activation_tensor = activations[layer_name][0]
+        # Extract the activation tensor for the specified layer from the tuple
+        if isinstance(activations[layer_name], tuple):
+            activation_tensor = activations[layer_name][0]
+        else:
+            activation_tensor = activations[layer_name]
         num_activations = activation_tensor.shape[0]
         grid_size = math.ceil(math.sqrt(num_activations))
 
@@ -536,14 +359,20 @@ def plot_single_observation(observation):
 def observation_to_rgb(observation):
     # Ensure the observation is a 64x64x3 tensor
     # assert observation.shape == (64, 64, 3), "Observation must be a 64x64x3 tensor" #Do we need this?
-
+    observation = torch.tensor(observation, dtype=torch.float32)
     # Scale the observation values to the range of 0 to 255
-    rgb_image = observation * 255
+    if observation.dim() == 3:
+        observation = observation.permute(1, 2, 0)
+        rgb_image = observation * 255
 
     # Convert the tensor to uint8 data type
-    rgb_image = rgb_image.astype(np.uint8)
+        rgb_images = rgb_image.astype(np.uint8)
+    elif observation.dim() == 4:
+        # observation = observation.permute(0, 2, 3, 1)
+        rgb_images = observation * 255
 
-    return rgb_image
+
+    return rgb_images
 
 def tensor_to_image(tensor):
     return tensor.squeeze().transpose(1,2,0)

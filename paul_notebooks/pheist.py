@@ -8,7 +8,7 @@
 import gym
 import random
 import numpy as np
-from helpers import generate_action
+from paul_notebooks.phelpers import generate_action
 from procgen import ProcgenGym3Env
 import imageio
 import matplotlib.pyplot as plt
@@ -369,6 +369,13 @@ class EnvState:
                 if key_index == ents["image_theme"].val:
                     x = ents["x"].val 
                     y = ents["y"].val 
+                    if math.isnan(x):
+                        x = 0  
+                    if math.isnan(y):
+                        y = 0 
+        
+                    x = math.floor(x)
+                    y = math.floor(y)
                     return (x,y)
                     
         raise ValueError("No key found!")
@@ -378,8 +385,8 @@ class EnvState:
         for ents in state_values["ents"]:
             if ents["image_type"].val== 2:
                 if key_index == ents["image_theme"].val:
-                    ents["x"].val = float(y) + .5
-                    ents["y"].val = float(x) + .5
+                    ents["x"].val = float(x) + .5
+                    ents["y"].val = float(y) + .5
         self.state_bytes = _serialize_maze_state(state_values)
 
     def set_lock_position(self, key_index, x, y):
@@ -781,7 +788,8 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
         "red_key": [],
         "blue_lock": [],
         "green_lock": [],
-        "red_lock": []
+        "red_lock": [],
+        "empty_maze": []
     }
 
     key_indices = {"blue": 0, "green": 1, "red": 2}
@@ -802,6 +810,9 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
                     ents["x"].val = -1
                     ents["y"].val = -1
                 elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+                elif stage == 4 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"], key_indices["red"]]:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
@@ -866,6 +877,14 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
                         venv.env.callmethod("set_state", [state_bytes])
                         obs = venv.reset()
                         dataset["blue_lock"].append(obs[0].transpose(1,2,0))
+
+        # Create empty maze
+        state.delete_keys_and_locks(3)
+        state_bytes = state.state_bytes
+        if state_bytes is not None:
+            venv.env.callmethod("set_state", [state_bytes])
+            obs = venv.reset()
+            dataset["empty_maze"].append(obs[0].transpose(1,2,0))
 
         venv.close()
 
