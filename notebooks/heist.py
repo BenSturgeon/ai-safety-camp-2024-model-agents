@@ -4,7 +4,7 @@
 
 # The code is based off Monte's code in procgen tools with modifications to account for the differences in environment.
 
-
+import os
 import gym
 import random
 import numpy as np
@@ -302,10 +302,31 @@ def get_legal_mouse_positions(grid: np.ndarray, entities: List[Dict[str, StateVa
     
     return legal_positions
 
+def get_cheese_venv_pair(
+    seed: int, has_cheese_tup: Tuple[bool, bool] = (True, False)
+):
+    "Return a venv of 2 environments from a seed, with cheese in the first environment if has_cheese_tup[0] and in the second environment if has_cheese_tup[1]."
+    venv = create_venv(num=2, start_level=seed, num_levels=1)
+
+    for idx in range(2):
+        if has_cheese_tup[idx]:
+            continue  # Skip if we want cheese in this environment
+        remove_cheese(venv, idx=idx)
+
+    return venv
+
+def copy_venv(venv, idx: int):
+    "Return a copy of venv number idx. WARNING: After level is finished, the copy will be reset."
+    sb = venv.env.callmethod("get_state")[idx]
+    env = create_venv(num=1, start_level=0, num_levels=1)
+    env.env.callmethod("set_state", [sb])
+    return env
 
 class EnvState:
     def __init__(self, state_bytes: bytes):
         self.state_bytes = state_bytes
+        self.key_indices = {"blue": 0, "green": 1, "red": 2}
+
 
     @property
     def state_vals(self):
@@ -437,6 +458,35 @@ class EnvState:
         for ents in state_values["ents"]:
             if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
                 if ents["image_theme"].val in [KEY_COLORS[color] for color in colors_to_delete]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_key(self, key_index):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys_and_locks(self, stage):
+
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+                if stage == 2 and ents["image_theme"].val == self.key_indices["blue"]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+                elif stage == 3 and ents["image_theme"].val in [self.key_indices["blue"], self.key_indices["green"]]:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
@@ -592,11 +642,12 @@ def get_maze_structure(data):
     return positions
 
 def get_keys(state_values):
-    positions = []
+    positions = {}
     for ents in state_values["ents"]:
         if ents["image_type"].val== 2:
             print(ents)
-            positions.append({"x" :ents["x"].val, "y" :ents["y"].val, "alpha" : ents["alpha"].val})
+            if ents["x"].val > 1 or ents["y"].val > 1: 
+                positions[ents["image_theme"].val] = {"x" :ents["x"].val, "y" :ents["y"].val}
     return positions
 
 
@@ -607,7 +658,6 @@ import random
 def create_key_states(key_color_combinations, num_samples=5, num_levels=100):
     observations_list = [[] for _ in range(num_samples)]
     key_indices = {"blue": 0, "green": 1, "red": 2}
-
     sample_idx = 0
     while sample_idx < num_samples:
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
@@ -691,28 +741,7 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     key_indices = {"blue": 0, "green": 1, "red": 2}
 
-    def delete_keys(self):
-        state_values = self.state_vals
-        for ents in state_values["ents"]:
-            if ents["image_type"].val == 2:  # Check if the entity is a key
-                ents["x"].val = -1
-                ents["y"].val = -1
-        self.state_bytes = _serialize_maze_state(state_values)
-
-    def delete_keys_and_locks(self, stage):
-        state_values = self.state_vals
-        for ents in state_values["ents"]:
-            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
-                if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
-                elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
-        self.state_bytes = _serialize_maze_state(state_values)
-
-    EnvState.delete_keys = delete_keys
-    EnvState.delete_keys_and_locks = delete_keys_and_locks
+    
 
     while any(len(samples) < num_samples_per_category for samples in dataset.values()):
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
@@ -776,6 +805,50 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
+def venv_with_all_mouse_positions(venv):
+    """
+    From a venv with a single env, create a new venv with one env for each legal mouse position.
+
+    Returns venv_all, (legal_mouse_positions, inner_grid_without_mouse)
+    Typically you'd call this with `venv_all, _ = venv_with_all_mouse_positions(venv)`,
+    The extra return values are useful for conciseness sometimes.
+    """
+    assert (
+        venv.num_envs == 1
+    ), f"Did you forget to use copy_venv to get a single env?"
+
+    sb_back = venv.env.callmethod("get_state")[0]
+    env_state = EnvState(sb_back)
+
+    grid = env_state.inner_grid(with_mouse=False)
+    legal_mouse_positions = get_legal_mouse_positions(grid)
+
+    # convert coords from inner to outer grid coordinates
+    padding = get_padding(grid)
+
+    # create a venv for each legal mouse position
+    state_bytes_list = []
+    for mx, my in legal_mouse_positions:
+        # we keep a backup of the state bytes for efficiency, as calling set_mouse_pos
+        # implicitly calls _parse_state_bytes, which is slow. this is a hack.
+        # NOTE: Object orientation hurts us here. It would be better to have functions.
+        env_state.set_mouse_pos(mx + padding, my + padding)
+        state_bytes_list.append(env_state.state_bytes)
+        env_state.state_bytes = sb_back
+
+    threads = 1 if len(legal_mouse_positions) < 100 else os.cpu_count()
+    venv_all = create_venv(
+        num=len(legal_mouse_positions),
+        num_threads=threads,
+        num_levels=1,
+        start_level=1,
+    )
+    venv_all.env.callmethod("set_state", state_bytes_list)
+    return venv_all, (legal_mouse_positions, grid)
+
+def get_padding(grid: np.ndarray) -> int:
+    """Return the padding of the (inner) grid, i.e. the number of walls around the maze."""
+    return (WORLD_DIM - grid.shape[0]) // 2
 
 def set_mouse_to_center(state):
     # Find the legal positions for the mouse
