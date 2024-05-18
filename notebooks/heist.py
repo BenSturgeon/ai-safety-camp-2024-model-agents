@@ -986,7 +986,7 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
-def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0):
+def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0, keep_player=True):
     dataset = {
         "empty_maze": []
     }
@@ -999,7 +999,11 @@ def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0):
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
         state = state_from_venv(venv, 0)
 
-        state.remove_all_entities()
+        state.remove_gem()
+        state.delete_keys()
+        state.delete_locks()
+        if not keep_player:
+            state.remove_player()
         state_bytes = state.state_bytes
         if state_bytes is not None:
             venv.env.callmethod("set_state", [state_bytes])
