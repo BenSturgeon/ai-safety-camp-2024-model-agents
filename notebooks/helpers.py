@@ -13,6 +13,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import CheckpointCallback
 import torch
 
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
@@ -899,5 +900,32 @@ def calc_weighted_activations(activations_list, activations_weighting = [1, -1])
                 weighted_activations[layer] += activations_weighting[i] * activations[layer][0]
 
     return weighted_activations
+
+def create_objective_vectors(model_activations, layer_paths, num_samples = 16):
+    # Create objective vectors that are the mean of activations for obs that correspond to model going for a specific objective.
+
+    # Create and update datasets
+    dataset = heist.create_classified_dataset(num_samples_per_category=num_samples, num_levels=0)
+    empty_dataset = heist.create_empty_maze_dataset(num_samples_per_category=num_samples, num_levels=0)
+    dataset.update(empty_dataset)
+
+    # Initialize dictionaries for activations and class vectors
+    objective_activations = {}
+    objective_vectors = defaultdict(dict)
+
+    # Process each objective in the dataset
+    for objective, data in dataset.items():
+        # Stack and convert the dataset to a tensor
+        dataset_tensor = np.stack(data)
+        
+        # Run the model to get output and activations
+        _, activations = model_activations.run_with_cache(observation_to_rgb(dataset_tensor), layer_paths)
+        objective_vectors[objective] = activations
+        
+        # Calculate the mean of activations for each layer
+        for layer, activation in activations.items():
+            objective_vectors[objective][layer] = torch.stack(activation).mean(dim=0)
+
+    return objective_vectors
 
 
