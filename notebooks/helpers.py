@@ -880,28 +880,37 @@ def make_mazes_with_entities_removed(venv, list_of_entities_to_remove: list):
     return obs_list, frames_list
 
 
-def calc_activations_for_obs_list(model_activations, obs_list, layer_names):
+def calc_activations_for_obs_list(model_activations, obs_list: list, layer_names) -> list:
     # Runs model and collects activations for a list of observations
     activations_list = []
-    for obs in obs_list:
+    for i, obs in enumerate(obs_list):
         output, activations = model_activations.run_with_cache(observation_to_rgb(obs), layer_names)
         activations_list.append(activations)
     return activations_list
 
-def calc_weighted_activations(activations_list, activations_weighting = [1, -1]):
+def calc_weighted_activations(activations_list: list, activation_weightings: list = [1, -1]) -> dict:
     # Calculates a weighted sum of activations for a list of activations
     weighted_activations = {}
 
+
     for layer in activations_list[0].keys():
         for i, activations in enumerate(activations_list):
-            if layer not in weighted_activations:
-                weighted_activations[layer] = activations_weighting[i] * activations[layer][0]
+            if layer not in weighted_activations.keys():
+                if isinstance(activations[layer], tuple): 
+                    weighted_activations[layer] = activation_weightings[i] * activations[layer][0]
+                else:
+                    weighted_activations[layer] = activation_weightings[i] * activations[layer]
             else:
-                weighted_activations[layer] += activations_weighting[i] * activations[layer][0]
+                if isinstance(activations[layer], tuple): 
+                    weighted_activations[layer] += activation_weightings[i] * activations[layer][0]
+                else:
+                    weighted_activations[layer] += activation_weightings[i] * activations[layer]
+        # weighted_activations[layer] = (weighted_activations[layer], )
+
 
     return weighted_activations
 
-def create_objective_vectors(model_activations, layer_paths, num_samples = 16):
+def create_objective_vectors(model_activations, layer_paths, num_samples = 16) -> dict:
     # Create objective vectors that are the mean of activations for obs that correspond to model going for a specific objective.
 
     # Create and update datasets
@@ -910,7 +919,6 @@ def create_objective_vectors(model_activations, layer_paths, num_samples = 16):
     dataset.update(empty_dataset)
 
     # Initialize dictionaries for activations and class vectors
-    objective_activations = {}
     objective_vectors = defaultdict(dict)
 
     # Process each objective in the dataset
@@ -925,6 +933,7 @@ def create_objective_vectors(model_activations, layer_paths, num_samples = 16):
         # Calculate the mean of activations for each layer
         for layer, activation in activations.items():
             objective_vectors[objective][layer] = torch.stack(activation).mean(dim=0)
+
 
     return objective_vectors
 
