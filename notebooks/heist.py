@@ -540,7 +540,11 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
     # Functions to read values of different types
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
-        val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
+        try:
+            val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
+        except:
+            val = None
+            pass
         idx += sz
         return val, idx
 
