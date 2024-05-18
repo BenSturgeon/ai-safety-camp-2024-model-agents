@@ -226,7 +226,7 @@ def create_venv(
     
 
 
-model = load_model()
+# model = load_model() # load_model uses outdated model
 
 
 
@@ -453,6 +453,14 @@ class EnvState:
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
+    def remove_player(self):
+        state_values = self.state_vals  
+        for ents in state_values["ents"]:
+            if ents["image_type"].val== 0:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
     def delete_specific_keys_and_locks(self, colors_to_delete):
         state_values = self.state_vals
         for ents in state_values["ents"]:
@@ -466,6 +474,14 @@ class EnvState:
         state_values = self.state_vals
         for ents in state_values["ents"]:
             if ents["image_type"].val == 2:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_locks(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a key
                 ents["x"].val = -1
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
@@ -490,6 +506,77 @@ class EnvState:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+
+    def get_lock_positions(self):
+        lock_positions = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a lock
+                lock_positions.append((ents["x"].val, ents["y"].val))
+        return lock_positions
+
+    def get_key_position(self, key_index):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+        raise ValueError("Key not found")
+
+    def get_key_positions(self):
+        key_positions = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                key_positions.append((ents["x"].val, ents["y"].val))
+        return key_positions
+
+    def get_lock_statuses(self):
+        lock_statuses = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a lock
+                lock_statuses.append(ents)
+        return lock_statuses
+    
+    def delete_specific_keys(self, key_indices: list):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val in key_indices:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_specific_locks(self, lock_indices: list):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1 and ents["image_theme"].val in lock_indices:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+
+def get_lock_positions(state_vals):
+    lock_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 1:  # Check if the entity is a lock
+            lock_positions.append((ents["x"].val, ents["y"].val))
+
+    return lock_positions
+
+def get_key_position(state_vals, key_index):
+    for ents in state_vals["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+    raise ValueError("Key not found")
+
+
+def get_key_positions(state_vals):
+    key_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 2:  # Check if the entity is a key
+            key_positions.append((ents["x"].val, ents["y"].val))
+
+    return key_positions
     
 def get_lock_positions(state_vals):
     lock_positions = []
@@ -498,6 +585,23 @@ def get_lock_positions(state_vals):
             lock_positions.append((ents["x"].val, ents["y"].val))
 
     return lock_positions
+
+def get_key_position(state_vals, key_index):
+    for ents in state_vals["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+    raise ValueError("Key not found")
+
+
+def get_key_positions(state_vals):
+    key_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 2:  # Check if the entity is a key
+            key_positions.append((ents["x"].val, ents["y"].val))
+
+    return key_positions
+
+
 
 def get_lock_statuses(state_vals):
     lock_statuses = []

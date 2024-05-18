@@ -216,11 +216,14 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
         else:
             plt.show()
 
-def plot_activations_for_layers_rb_max(activations, layer_paths, save_filename_prefix=None, plot_scale_max=5):
+def plot_activations_for_layers_rb_max(activations, layer_paths=None, save_filename_prefix=None, plot_scale_max=5):
     plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
 
+
+    if layer_paths is None:
+        layer_paths = list(activations.keys())
     for layer_name in layer_paths:
-        if layer_name not in activations:
+        if layer_name not in list(activations.keys()):
             print(f"No activations found for layer: {layer_name}")
             continue
 
@@ -440,6 +443,26 @@ def plot_single_observation(observation):
     plt.title("Observation")
     plt.axis('off')  
     plt.show()
+
+def plot_multiple_observations(observation_list):
+    num_observations = len(observation_list)
+    grid_size = math.ceil(math.sqrt(num_observations))
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2))
+
+    for i in range(grid_size):
+        for j in range(grid_size):
+            idx = i * grid_size + j
+            if idx < num_observations:
+                ax = axes[i, j]
+                ax.imshow(observation_list[idx])
+                ax.set_title(f"Observation {idx}")
+                ax.axis('off')
+            else:
+                axes[i, j].axis('off')  
+
+    plt.tight_layout()
+    plt.show()
+
 
 
 def observation_to_rgb(observation):
@@ -787,3 +810,94 @@ def run_gem_steering_experiment(model_path, layer_number, modification_value, nu
     )
 
     return total_reward_steering
+
+
+
+### Functions for generating/plotting activations for custom mazes
+
+def make_mazes_with_entities_removed(venv, list_of_entities_to_remove: list):
+    # Takes in maze/venv with a list of lists of entities to remove.
+    # For each list of entities to remove, creates obs+frame with those entities removed from maze
+
+    # Remove entities not in entity list
+    def remove_entities(state, entities):
+        if entities == ["all"]:
+            state.remove_all_entities()
+            return state
+        else:
+            if "gem" in entities:
+                state.remove_gem()
+            if "player" in entities:
+                state.remove_player()
+            if "blue_key" in entities:
+                state.delete_specific_keys([0])
+            if "green_key" in entities:
+                state.delete_specific_keys([1])
+            if "red_key" in entities:
+                state.delete_specific_keys([2])
+            if "blue_lock" in entities:
+                state.delete_specific_locks([0])
+            if "green_lock" in entities:
+                state.delete_specific_locks([1])
+            if "red_lock" in entities:
+                state.delete_specific_locks([2])
+            return state
+
+    obs_list = []
+    frames_list = []
+
+    # Save original state
+    original_state = heist.state_from_venv(venv, 0)
+    
+    # Save original obs and frame
+    original_obs = venv.reset()
+    original_frame = venv.render(mode='rgb_array')
+
+    obs_list.append(original_obs)
+    frames_list.append(original_frame)
+
+    for entities_to_remove in list_of_entities_to_remove:
+        # Reset state
+        venv.env.callmethod("set_state", [original_state.state_bytes])
+        state = heist.state_from_venv(venv, 0)
+
+        # Remove entities
+        state = remove_entities(state, entities_to_remove)
+
+        # Update environment using new state
+        state_bytes = state.state_bytes
+        if state_bytes is not None:
+            venv.env.callmethod("set_state", [state_bytes])
+            obs = venv.reset()
+            frame = venv.render(mode='rgb_array')
+        else:
+            raise ValueError("State bytes is None")
+
+        obs_list.append(obs)
+        frames_list.append(frame)
+
+    return obs_list, frames_list
+
+
+def calc_activations_for_obs_list(model_activations, obs_list, layer_names):
+    # Runs model and collects activations for a list of observations
+    activations_list = []
+    for obs in obs_list:
+        output, activations = model_activations.run_with_cache(observation_to_rgb(obs), layer_names)
+        activations_list.append(activations)
+    return activations_list
+
+def calc_weighted_activations(activations_list, activations_weighting = [1, -1]):
+    # Calculates a weighted sum of activations for a list of activations
+    weighted_activations = {}
+
+    for layer in activations_list[0].keys():
+        for i, activations in enumerate(activations_list):
+            if layer not in weighted_activations:
+                weighted_activations[layer] = activations_weighting[i] * activations[layer][0]
+            else:
+                weighted_activations[layer] += activations_weighting[i] * activations[layer][0]
+
+    return weighted_activations
+
+
