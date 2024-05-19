@@ -13,8 +13,11 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import CheckpointCallback
 import torch
 
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import seaborn as sns
 import numpy as np
 import math
@@ -215,6 +218,66 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
         else:
             plt.show()
 
+def plot_activations_for_layers_rb_max(activations, layer_paths=None, save_filename_prefix=None, plot_scale_max=5):
+    plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
+
+
+    if layer_paths is None:
+        layer_paths = list(activations.keys())
+    for layer_name in layer_paths:
+        if layer_name not in list(activations.keys()):
+            print(f"No activations found for layer: {layer_name}")
+            continue
+
+        # Extract the activation tensor for the specified layer from the tuple
+        if isinstance(activations[layer_name], tuple):
+            activation_tensor = activations[layer_name][0]
+        else:
+            activation_tensor = activations[layer_name]
+        num_activations = activation_tensor.shape[0]
+        grid_size = math.ceil(math.sqrt(num_activations))
+
+        # Create a figure with GridSpec to manage space between image and color bar
+        fig = plt.figure(figsize=(grid_size * 2.5, grid_size * 2))  # Adjust figure size to better accommodate color bars
+        gs = gridspec.GridSpec(grid_size, grid_size, width_ratios=[1]*grid_size, height_ratios=[1]*grid_size)
+
+        activation_idx = 0
+        for i in range(grid_size):
+            for j in range(grid_size):
+                ax = fig.add_subplot(gs[i, j])
+                if activation_idx < num_activations:
+                    if activation_tensor.ndim == 3:  # Typical for conv layers
+                        data = activation_tensor[activation_idx, :, :]
+                    # elif activation_tensor.ndim == 2:  # Typical for flattened or dense layers
+                    #     data = np.tile(activation_tensor[activation_idx, :], (10, 1))  # Expand vertically
+                    # elif activation_tensor.ndim == 1:  # Directly dense layer, rare case
+                    #     data = np.tile(activation_tensor[:, np.newaxis], (1, 10))  # Expand horizontally
+                    else:
+                        raise ValueError(f"Unsupported tensor dimension {activation_tensor.ndim}: must be 3")
+
+                    im = ax.imshow(data, aspect='auto', vmin=-plot_scale_max, vmax=plot_scale_max)
+                    ax.set_title(f'Filter {activation_idx + 1} {layer_name}', fontsize=8)
+
+                    # Create a new axis for the color bar next to the current axis
+                    divider = make_axes_locatable(ax)
+                    cax = divider.append_axes("right", size="5%", pad=0.05)
+                    fig.colorbar(im, cax=cax)
+
+                    activation_idx += 1
+                else:
+                    ax.axis('off')
+                ax.axis('off')  # Maintain a clean look by hiding axis ticks and labels
+
+        plt.tight_layout()
+
+        if save_filename_prefix:
+            save_filename = f"{save_filename_prefix}_{layer_name}.png"
+            plt.savefig(save_filename)
+            plt.close()
+        else:
+            plt.show()
+
+
 
 
 def plot_four_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
@@ -382,6 +445,26 @@ def plot_single_observation(observation):
     plt.title("Observation")
     plt.axis('off')  
     plt.show()
+
+def plot_multiple_observations(observation_list):
+    num_observations = len(observation_list)
+    grid_size = math.ceil(math.sqrt(num_observations))
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2))
+
+    for i in range(grid_size):
+        for j in range(grid_size):
+            idx = i * grid_size + j
+            if idx < num_observations:
+                ax = axes[i, j]
+                ax.imshow(observation_list[idx])
+                ax.set_title(f"Observation {idx}")
+                ax.axis('off')
+            else:
+                axes[i, j].axis('off')  
+
+    plt.tight_layout()
+    plt.show()
+
 
 
 def observation_to_rgb(observation):
@@ -729,3 +812,154 @@ def run_gem_steering_experiment(model_path, layer_number, modification_value, nu
     )
 
     return total_reward_steering
+
+
+
+### Functions for generating/plotting activations for custom mazes
+
+def make_mazes_with_entities_removed(venv, list_of_entities_to_remove: list):
+    # Takes in maze/venv with a list of lists of entities to remove.
+    # For each list of entities to remove, creates obs+frame with those entities removed from maze
+
+    # Remove entities not in entity list
+    def remove_entities(state, entities):
+        if entities == ["all"]:
+            state.remove_all_entities()
+            return state
+        else:
+            if "gem" in entities:
+                state.remove_gem()
+            if "player" in entities:
+                state.remove_player()
+            if "blue_key" in entities:
+                state.delete_specific_keys([0])
+            if "green_key" in entities:
+                state.delete_specific_keys([1])
+            if "red_key" in entities:
+                state.delete_specific_keys([2])
+            if "blue_lock" in entities:
+                state.delete_specific_locks([0])
+            if "green_lock" in entities:
+                state.delete_specific_locks([1])
+            if "red_lock" in entities:
+                state.delete_specific_locks([2])
+            return state
+
+    obs_list = []
+    frames_list = []
+
+    # Save original state
+    original_state = heist.state_from_venv(venv, 0)
+    
+    # Save original obs and frame
+    original_obs = venv.reset()
+    original_frame = venv.render(mode='rgb_array')
+
+    obs_list.append(original_obs)
+    frames_list.append(original_frame)
+
+    for entities_to_remove in list_of_entities_to_remove:
+        # Reset state
+        venv.env.callmethod("set_state", [original_state.state_bytes])
+        state = heist.state_from_venv(venv, 0)
+
+        # Remove entities
+        state = remove_entities(state, entities_to_remove)
+
+        # Update environment using new state
+        state_bytes = state.state_bytes
+        if state_bytes is not None:
+            venv.env.callmethod("set_state", [state_bytes])
+            obs = venv.reset()
+            frame = venv.render(mode='rgb_array')
+        else:
+            raise ValueError("State bytes is None")
+
+        obs_list.append(obs)
+        frames_list.append(frame)
+
+    return obs_list, frames_list
+
+
+def calc_activations_for_obs_list(model_activations, obs_list: list, layer_names) -> list:
+    # Runs model and collects activations for a list of observations
+    activations_list = []
+    for i, obs in enumerate(obs_list):
+        output, activations = model_activations.run_with_cache(observation_to_rgb(obs), layer_names)
+        activations_list.append(activations)
+    return activations_list
+
+def calc_weighted_activations(activations_list: list, activation_weightings: list = [1, -1]) -> dict:
+    # Calculates a weighted sum of activations for a list of activations
+    weighted_activations = {}
+
+
+    for layer in activations_list[0].keys():
+        for i, activations in enumerate(activations_list):
+            if layer not in weighted_activations.keys():
+                if isinstance(activations[layer], tuple): 
+                    weighted_activations[layer] = activation_weightings[i] * activations[layer][0]
+                else:
+                    weighted_activations[layer] = activation_weightings[i] * activations[layer]
+            else:
+                if isinstance(activations[layer], tuple): 
+                    weighted_activations[layer] += activation_weightings[i] * activations[layer][0]
+                else:
+                    weighted_activations[layer] += activation_weightings[i] * activations[layer]
+        # weighted_activations[layer] = (weighted_activations[layer], )
+
+
+    return weighted_activations
+
+def get_objective_activations(model_activations, layer_paths, num_samples = 16) -> dict:
+    '''Run observations for different objectives through model and collect activations for each layer.'''
+
+    # Create and update datasets
+    dataset = heist.create_classified_dataset(num_samples_per_category=num_samples, num_levels=0)
+    empty_dataset = heist.create_empty_maze_dataset(num_samples_per_category=num_samples, num_levels=0)
+    dataset.update(empty_dataset)
+
+    # Initialize dictionaries for activations and class vectors
+    objective_activations = defaultdict(dict)
+
+    # Process each objective in the dataset
+    for objective, data in dataset.items():
+        # Stack and convert the dataset to a tensor
+        dataset_tensor = np.stack(data)
+        
+        # Run the model to get output and activations
+        _, activations = model_activations.run_with_cache(observation_to_rgb(dataset_tensor), layer_paths)
+        objective_activations[objective] = activations
+
+
+
+    return objective_activations
+
+def create_objective_vectors(model_activations, layer_paths, num_samples = 16) -> dict:
+    # Create objective vectors that are the mean of activations for obs that correspond to model going for a specific objective.
+
+    # Create and update datasets
+    dataset = heist.create_classified_dataset(num_samples_per_category=num_samples, num_levels=0)
+    empty_dataset = heist.create_empty_maze_dataset(num_samples_per_category=num_samples, num_levels=0)
+    dataset.update(empty_dataset)
+
+    # Initialize dictionaries for activations and class vectors
+    objective_vectors = defaultdict(dict)
+
+    # Process each objective in the dataset
+    for objective, data in dataset.items():
+        # Stack and convert the dataset to a tensor
+        dataset_tensor = np.stack(data)
+        
+        # Run the model to get output and activations
+        _, activations = model_activations.run_with_cache(observation_to_rgb(dataset_tensor), layer_paths)
+        objective_vectors[objective] = activations
+        
+        # Calculate the mean of activations for each layer
+        for layer, activation in activations.items():
+            objective_vectors[objective][layer] = torch.stack(activation).mean(dim=0)
+
+
+    return objective_vectors
+
+

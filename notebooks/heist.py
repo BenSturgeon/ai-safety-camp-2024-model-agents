@@ -4,7 +4,7 @@
 
 # The code is based off Monte's code in procgen tools with modifications to account for the differences in environment.
 
-
+import os
 import gym
 import random
 import numpy as np
@@ -201,7 +201,7 @@ def wrap_venv(venv) -> ToBaselinesVecEnv:
     return venv  
 
 def create_venv(
-    num: int, start_level: int, num_levels: int, num_threads: int = 1
+    num: int, start_level: int, num_levels: int, num_threads: int = 1, distribution_mode: str = "easy"
 ):
     """
     Create a wrapped venv. See https://github.com/openai/procgen#environment-options for params
@@ -217,7 +217,7 @@ def create_venv(
         env_name="heist",
         num_levels=num_levels,
         start_level=start_level,
-        distribution_mode="easy",
+        distribution_mode=distribution_mode,
         num_threads=num_threads,
         render_mode="rgb_array",
     )
@@ -226,7 +226,7 @@ def create_venv(
     
 
 
-model = load_model()
+# model = load_model() # load_model uses outdated model
 
 
 
@@ -302,10 +302,31 @@ def get_legal_mouse_positions(grid: np.ndarray, entities: List[Dict[str, StateVa
     
     return legal_positions
 
+def get_cheese_venv_pair(
+    seed: int, has_cheese_tup: Tuple[bool, bool] = (True, False)
+):
+    "Return a venv of 2 environments from a seed, with cheese in the first environment if has_cheese_tup[0] and in the second environment if has_cheese_tup[1]."
+    venv = create_venv(num=2, start_level=seed, num_levels=1)
+
+    for idx in range(2):
+        if has_cheese_tup[idx]:
+            continue  # Skip if we want cheese in this environment
+        remove_cheese(venv, idx=idx)
+
+    return venv
+
+def copy_venv(venv, idx: int):
+    "Return a copy of venv number idx. WARNING: After level is finished, the copy will be reset."
+    sb = venv.env.callmethod("get_state")[idx]
+    env = create_venv(num=1, start_level=0, num_levels=1)
+    env.env.callmethod("set_state", [sb])
+    return env
 
 class EnvState:
     def __init__(self, state_bytes: bytes):
         self.state_bytes = state_bytes
+        self.key_indices = {"blue": 0, "green": 1, "red": 2}
+
 
     @property
     def state_vals(self):
@@ -432,6 +453,14 @@ class EnvState:
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
+    def remove_player(self):
+        state_values = self.state_vals  
+        for ents in state_values["ents"]:
+            if ents["image_type"].val== 0:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
     def delete_specific_keys_and_locks(self, colors_to_delete):
         state_values = self.state_vals
         for ents in state_values["ents"]:
@@ -440,6 +469,114 @@ class EnvState:
                     ents["x"].val = -1
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_locks(self):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_key(self, key_index):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:  # Check if the entity is a key
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_keys_and_locks(self, stage):
+
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
+                if stage == 2 and ents["image_theme"].val == self.key_indices["blue"]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+                elif stage == 3 and ents["image_theme"].val in [self.key_indices["blue"], self.key_indices["green"]]:
+                    ents["x"].val = -1
+                    ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def get_lock_positions(self):
+        lock_positions = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a lock
+                lock_positions.append((ents["x"].val, ents["y"].val))
+        return lock_positions
+
+    def get_key_position(self, key_index):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+        raise ValueError("Key not found")
+
+    def get_key_positions(self):
+        key_positions = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2:  # Check if the entity is a key
+                key_positions.append((ents["x"].val, ents["y"].val))
+        return key_positions
+
+    def get_lock_statuses(self):
+        lock_statuses = []
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1:  # Check if the entity is a lock
+                lock_statuses.append(ents)
+        return lock_statuses
+    
+    def delete_specific_keys(self, key_indices: list):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val in key_indices:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+    def delete_specific_locks(self, lock_indices: list):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == 1 and ents["image_theme"].val in lock_indices:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+
+def get_lock_positions(state_vals):
+    lock_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 1:  # Check if the entity is a lock
+            lock_positions.append((ents["x"].val, ents["y"].val))
+
+    return lock_positions
+
+def get_key_position(state_vals, key_index):
+    for ents in state_vals["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+    raise ValueError("Key not found")
+
+
+def get_key_positions(state_vals):
+    key_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 2:  # Check if the entity is a key
+            key_positions.append((ents["x"].val, ents["y"].val))
+
+    return key_positions
     
 def get_lock_positions(state_vals):
     lock_positions = []
@@ -448,6 +585,23 @@ def get_lock_positions(state_vals):
             lock_positions.append((ents["x"].val, ents["y"].val))
 
     return lock_positions
+
+def get_key_position(state_vals, key_index):
+    for ents in state_vals["ents"]:
+            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
+                return (ents["x"].val, ents["y"].val)
+    raise ValueError("Key not found")
+
+
+def get_key_positions(state_vals):
+    key_positions = []
+    for ents in state_vals["ents"]:
+        if ents["image_type"].val == 2:  # Check if the entity is a key
+            key_positions.append((ents["x"].val, ents["y"].val))
+
+    return key_positions
+
+
 
 def get_lock_statuses(state_vals):
     lock_statuses = []
@@ -560,6 +714,79 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
         ), "serialize(deserialize(state_bytes)) != state_bytes"
     return vals
 
+def _parse_maze_state_bytes_handling_buffer_error(state_bytes: bytes, assert_=DEBUG) -> StateValues:
+
+
+    def read_fixed(sb, idx, fmt):
+        sz = struct.calcsize(fmt)
+        if idx + sz > len(sb):
+            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            if fmt == '@i':  # Default for integers
+                default_val = 0
+            elif fmt == '@f':  # Default for floats
+                default_val = float('nan')  # or 0.0 depending on what makes sense for your context
+    
+            # Decide whether to advance idx or not
+            # Option 1: Do not advance idx if you want to try reading again later or handle this case differently
+            # Option 2: Advance idx to skip the expected number of bytes (more risky if data is critical)
+            # idx += sz  # Uncomment this line if you choose to advance idx
+    
+            return default_val, idx
+    
+        val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
+        idx += sz
+        return val, idx
+
+    read_int = lambda sb, idx: read_fixed(sb, idx, "@i")
+    read_float = lambda sb, idx: read_fixed(sb, idx, "@f")
+
+    def read_string(sb, idx):
+        sz, idx = read_int(sb, idx)
+        val = sb[idx : (idx + sz)].decode("ascii")
+        idx += sz
+        return val, idx
+
+
+    # Function to process a value definition and return a value (called recursively for loops)
+    def parse_value(vals, val_def, idx):
+        typ = val_def[0]
+        name = val_def[1]
+        # print((typ, name))
+        if typ == "int":
+            val, idx = read_int(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "float":
+            val, idx = read_float(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "string":
+            val, idx = read_string(state_bytes, idx)
+            vals[name] = StateValue(val, idx)
+        elif typ == "loop":
+            len_name = val_def[2]
+            loop_val_defs = val_def[3]
+            loop_len = vals[len_name].val
+            vals[name] = []
+            for _ in range(loop_len):
+                vals_this = {}
+                for loop_val_def in loop_val_defs:
+                    idx = parse_value(vals_this, loop_val_def, idx)
+                vals[name].append(vals_this)
+        return idx
+
+    # Dict to hold values
+    vals = {}
+
+    # Loop over list of value defs, parsing each
+    idx = 0
+    for val_def in HEIST_STATE_DICT_TEMPLATE:
+        idx = parse_value(vals, val_def, idx)
+
+
+    if assert_:
+        assert (
+            _serialize_maze_state(vals, assert_=False) == state_bytes
+        ), "serialize(deserialize(state_bytes)) != state_bytes"
+    return vals
 def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
     # Serialize any value to a bytes object
     def serialize_val(val):
@@ -608,11 +835,12 @@ def get_maze_structure(data):
     return positions
 
 def get_keys(state_values):
-    positions = []
+    positions = {}
     for ents in state_values["ents"]:
         if ents["image_type"].val== 2:
             print(ents)
-            positions.append({"x" :ents["x"].val, "y" :ents["y"].val, "alpha" : ents["alpha"].val})
+            if ents["x"].val > 1 or ents["y"].val > 1: 
+                positions[ents["image_theme"].val] = {"x" :ents["x"].val, "y" :ents["y"].val}
     return positions
 
 
@@ -623,7 +851,6 @@ import random
 def create_key_states(key_color_combinations, num_samples=5, num_levels=100):
     observations_list = [[] for _ in range(num_samples)]
     key_indices = {"blue": 0, "green": 1, "red": 2}
-
     sample_idx = 0
     while sample_idx < num_samples:
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
@@ -707,28 +934,7 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     key_indices = {"blue": 0, "green": 1, "red": 2}
 
-    def delete_keys(self):
-        state_values = self.state_vals
-        for ents in state_values["ents"]:
-            if ents["image_type"].val == 2:  # Check if the entity is a key
-                ents["x"].val = -1
-                ents["y"].val = -1
-        self.state_bytes = _serialize_maze_state(state_values)
-
-    def delete_keys_and_locks(self, stage):
-        state_values = self.state_vals
-        for ents in state_values["ents"]:
-            if ents["image_type"].val in [1, 2]:  # Check if the entity is a key or lock
-                if stage == 2 and ents["image_theme"].val == key_indices["blue"]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
-                elif stage == 3 and ents["image_theme"].val in [key_indices["blue"], key_indices["green"]]:
-                    ents["x"].val = -1
-                    ents["y"].val = -1
-        self.state_bytes = _serialize_maze_state(state_values)
-
-    EnvState.delete_keys = delete_keys
-    EnvState.delete_keys_and_locks = delete_keys_and_locks
+    
 
     while any(len(samples) < num_samples_per_category for samples in dataset.values()):
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
@@ -792,6 +998,79 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
+def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0, keep_player=True):
+    dataset = {
+        "empty_maze": []
+    }
+
+    key_indices = {"blue": 0, "green": 1, "red": 2}
+
+    
+
+    while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        state = state_from_venv(venv, 0)
+
+        state.remove_gem()
+        state.delete_keys()
+        state.delete_locks()
+        if not keep_player:
+            state.remove_player()
+        state_bytes = state.state_bytes
+        if state_bytes is not None:
+            venv.env.callmethod("set_state", [state_bytes])
+            obs = venv.reset()
+            dataset["empty_maze"].append(obs[0].transpose(1,2,0))
+
+
+        venv.close()
+
+    return dataset
+
+def venv_with_all_mouse_positions(venv):
+    """
+    From a venv with a single env, create a new venv with one env for each legal mouse position.
+
+    Returns venv_all, (legal_mouse_positions, inner_grid_without_mouse)
+    Typically you'd call this with `venv_all, _ = venv_with_all_mouse_positions(venv)`,
+    The extra return values are useful for conciseness sometimes.
+    """
+    assert (
+        venv.num_envs == 1
+    ), f"Did you forget to use copy_venv to get a single env?"
+
+    sb_back = venv.env.callmethod("get_state")[0]
+    env_state = EnvState(sb_back)
+
+    grid = env_state.inner_grid(with_mouse=False)
+    legal_mouse_positions = get_legal_mouse_positions(grid)
+
+    # convert coords from inner to outer grid coordinates
+    padding = get_padding(grid)
+
+    # create a venv for each legal mouse position
+    state_bytes_list = []
+    for mx, my in legal_mouse_positions:
+        # we keep a backup of the state bytes for efficiency, as calling set_mouse_pos
+        # implicitly calls _parse_state_bytes, which is slow. this is a hack.
+        # NOTE: Object orientation hurts us here. It would be better to have functions.
+        env_state.set_mouse_pos(mx + padding, my + padding)
+        state_bytes_list.append(env_state.state_bytes)
+        env_state.state_bytes = sb_back
+
+    threads = 1 if len(legal_mouse_positions) < 100 else os.cpu_count()
+    venv_all = create_venv(
+        num=len(legal_mouse_positions),
+        num_threads=threads,
+        num_levels=1,
+        start_level=1,
+    )
+    venv_all.env.callmethod("set_state", state_bytes_list)
+    return venv_all, (legal_mouse_positions, grid)
+
+def get_padding(grid: np.ndarray) -> int:
+    """Return the padding of the (inner) grid, i.e. the number of walls around the maze."""
+    return (WORLD_DIM - grid.shape[0]) // 2
 
 def set_mouse_to_center(state):
     # Find the legal positions for the mouse
