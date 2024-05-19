@@ -60,7 +60,8 @@ ordered_layer_names = {
  29: 'logits_fc',
  30: 'value_fc'
 }
-
+def get_ordered_layer_names():
+    return ordered_layer_names
 
 class ModelActivations:
     def __init__(self, model):

@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=http://127.0.0.1:8891/notebooks/train-procgen-pfrl/Untitled1.ipynb
+HostUrl=http://127.0.0.1:8891/files/train-procgen-pfrl/checkpoints/heist/nlev_100000_easy/vanilla/trained02/model_final.pt
