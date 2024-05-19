@@ -20,7 +20,7 @@ import struct
 import typing
 from typing import Tuple, Dict, Callable, List, Optional
 from dataclasses import dataclass
-from src.policies_modified import ImpalaCNN
+from src.policies_impala import ImpalaCNN
 from procgen_tools.procgen_wrappers import VecExtractDictObs, TransposeFrame, ScaledFloatFrame
 
 from gym3 import ToBaselinesVecEnv
@@ -178,7 +178,7 @@ Square = typing.Tuple[int, int]
 
 
 
-def load_model( model_path = '../model_1501.0_interpretable.pt'):
+def load_model( model_path = '../model_final.pt'):
     env_name = "procgen:procgen-heist-v0"  
 
     env = gym.make(env_name, start_level=100, num_levels=200, render_mode="rgb_array", distribution_mode="easy") #remove render mode argument to go faster but not produce images 
@@ -641,14 +641,25 @@ def state_from_venv(venv, idx: int = 0) -> EnvState:
     return EnvState(state_bytes_list[idx])
 
 def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
-    # Functions to read values of different types
+
+
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
-        try:
-            val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
-        except:
-            val = None
-            pass
+        if idx + sz > len(sb):
+            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            if fmt == '@i':  # Default for integers
+                default_val = 0
+            elif fmt == '@f':  # Default for floats
+                default_val = float('nan')  # or 0.0 depending on what makes sense for your context
+    
+            # Decide whether to advance idx or not
+            # Option 1: Do not advance idx if you want to try reading again later or handle this case differently
+            # Option 2: Advance idx to skip the expected number of bytes (more risky if data is critical)
+            # idx += sz  # Uncomment this line if you choose to advance idx
+    
+            return default_val, idx
+    
+        val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
         idx += sz
         return val, idx
 
@@ -660,6 +671,7 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
         val = sb[idx : (idx + sz)].decode("ascii")
         idx += sz
         return val, idx
+
 
     # Function to process a value definition and return a value (called recursively for loops)
     def parse_value(vals, val_def, idx):
@@ -986,7 +998,7 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
-def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0):
+def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0, keep_player=True):
     dataset = {
         "empty_maze": []
     }
@@ -999,7 +1011,11 @@ def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0):
         venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
         state = state_from_venv(venv, 0)
 
-        state.remove_all_entities()
+        state.remove_gem()
+        state.delete_keys()
+        state.delete_locks()
+        if not keep_player:
+            state.remove_player()
         state_bytes = state.state_bytes
         if state_bytes is not None:
             venv.env.callmethod("set_state", [state_bytes])

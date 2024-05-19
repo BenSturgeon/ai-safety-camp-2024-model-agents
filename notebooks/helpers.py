@@ -63,7 +63,8 @@ ordered_layer_names = {
  29: 'logits_fc',
  30: 'value_fc'
 }
-
+def get_ordered_layer_names():
+    return ordered_layer_names
 
 class ModelActivations:
     def __init__(self, model):
@@ -909,6 +910,30 @@ def calc_weighted_activations(activations_list: list, activation_weightings: lis
 
 
     return weighted_activations
+
+def get_objective_activations(model_activations, layer_paths, num_samples = 16) -> dict:
+    '''Run observations for different objectives through model and collect activations for each layer.'''
+
+    # Create and update datasets
+    dataset = heist.create_classified_dataset(num_samples_per_category=num_samples, num_levels=0)
+    empty_dataset = heist.create_empty_maze_dataset(num_samples_per_category=num_samples, num_levels=0)
+    dataset.update(empty_dataset)
+
+    # Initialize dictionaries for activations and class vectors
+    objective_activations = defaultdict(dict)
+
+    # Process each objective in the dataset
+    for objective, data in dataset.items():
+        # Stack and convert the dataset to a tensor
+        dataset_tensor = np.stack(data)
+        
+        # Run the model to get output and activations
+        _, activations = model_activations.run_with_cache(observation_to_rgb(dataset_tensor), layer_paths)
+        objective_activations[objective] = activations
+
+
+
+    return objective_activations
 
 def create_objective_vectors(model_activations, layer_paths, num_samples = 16) -> dict:
     # Create objective vectors that are the mean of activations for obs that correspond to model going for a specific objective.
