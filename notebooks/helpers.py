@@ -59,7 +59,7 @@ ordered_layer_names = {
  25: 'conv_seqs.2.res_block1',
  26: 'conv_seqs.2.res_block1.conv0',
  27: 'conv_seqs.2.res_block1.conv1',
- 28: 'hidden_fc',
+ 28: c,
  29: 'logits_fc',
  30: 'value_fc'
 }
