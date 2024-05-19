@@ -388,8 +388,8 @@ class EnvState:
         for ents in state_values["ents"]:
             if ents["image_type"].val== 2:
                 if key_index == ents["image_theme"].val:
-                    ents["x"].val = float(y) + .5
-                    ents["y"].val = float(x) + .5
+                    ents["x"].val = float(x) 
+                    ents["y"].val = float(y) 
         self.state_bytes = _serialize_maze_state(state_values)
 
     def set_lock_position(self, key_index, x, y):
@@ -481,7 +481,7 @@ class EnvState:
     def delete_locks(self):
         state_values = self.state_vals
         for ents in state_values["ents"]:
-            if ents["image_type"].val == 1:  # Check if the entity is a key
+            if ents["image_type"].val == 1:  # Check if the entity is a lock
                 ents["x"].val = -1
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
