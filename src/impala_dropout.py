@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-# Code is replicated from https://github.com/lerrytang/train-procgen-pfrl/tree/main 
-
 class ResidualBlock(nn.Module):
 
     def __init__(self, channels):
@@ -24,10 +22,9 @@ class ResidualBlock(nn.Module):
         x = self.conv1(x)
         return x + inputs
 
-
 class ConvSequence(nn.Module):
 
-    def __init__(self, input_shape, out_channels):
+    def __init__(self, input_shape, out_channels, dropout_prob=0.1):
         super(ConvSequence, self).__init__()
         self._input_shape = input_shape
         self._out_channels = out_channels
@@ -40,23 +37,24 @@ class ConvSequence(nn.Module):
                                        padding=1)
         self.res_block0 = ResidualBlock(self._out_channels)
         self.res_block1 = ResidualBlock(self._out_channels)
+        self.dropout = nn.Dropout2d(p=dropout_prob)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.max_pool2d(x)
         x = self.res_block0(x)
         x = self.res_block1(x)
+        x = self.dropout(x)  # Apply dropout at the end of conv sequence
         return x
 
     def get_output_shape(self):
         _c, h, w = self._input_shape
         return self._out_channels, (h + 1) // 2, (w + 1) // 2
 
-
 class ImpalaCNN(nn.Module):
     """Network from IMPALA paper, to work with pfrl."""
 
-    def __init__(self, obs_space, num_outputs):
+    def __init__(self, obs_space, num_outputs, conv_dropout_prob=0.1, fc_dropout_prob=0.5):
 
         super(ImpalaCNN, self).__init__()
 
@@ -65,12 +63,13 @@ class ImpalaCNN(nn.Module):
 
         conv_seqs = []
         for out_channels in [16, 32, 32]:
-            conv_seq = ConvSequence(shape, out_channels)
+            conv_seq = ConvSequence(shape, out_channels, dropout_prob=conv_dropout_prob)
             shape = conv_seq.get_output_shape()
             conv_seqs.append(conv_seq)
         self.conv_seqs = nn.ModuleList(conv_seqs)
         self.hidden_fc = nn.Linear(in_features=shape[0] * shape[1] * shape[2],
                                    out_features=256)
+        self.fc_dropout = nn.Dropout(p=fc_dropout_prob)
         self.logits_fc = nn.Linear(in_features=256, out_features=num_outputs)
         self.value_fc = nn.Linear(in_features=256, out_features=1)
         # Initialize weights of logits_fc
@@ -87,6 +86,7 @@ class ImpalaCNN(nn.Module):
         x = torch.relu(x)
         x = self.hidden_fc(x)
         x = torch.relu(x)
+        x = self.fc_dropout(x)  # Apply dropout after fully connected layer
         logits = self.logits_fc(x)
         dist = torch.distributions.Categorical(logits=logits)
         value = self.value_fc(x)
