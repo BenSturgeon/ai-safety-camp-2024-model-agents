@@ -2,8 +2,7 @@ import torch.nn as nn
 import torch
 import imageio
 
-import sys
-sys.path.append('../') #This is added so we can import from the source folder
+
 import gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecMonitor, VecFrameStack, DummyVecEnv
@@ -23,7 +22,8 @@ import numpy as np
 import math
 import imageio
 import random
-
+import sys
+sys.path.append('../') #This is added so we can import from the source folder
 from src.policies_impala import ImpalaCNN
 # from src.policies_modified import ImpalaCNN
 from src.visualisation_functions import *
