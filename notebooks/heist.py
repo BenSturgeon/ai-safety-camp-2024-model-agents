@@ -35,6 +35,7 @@ LOCKED_DOOR = 1
 WORLD_DIM = 25
 EMPTY = 100
 BLOCKED = 51
+GEM= 9
 
 HEIST_STATE_DICT_TEMPLATE = [
     ["int", "SERIALIZE_VERSION"],
@@ -410,6 +411,8 @@ class EnvState:
         self.state_bytes = _serialize_maze_state(state_values)
     
 
+    
+
 
     def set_grid(self, grid: np.ndarray, pad=False):
         """
@@ -554,6 +557,32 @@ class EnvState:
                 ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
+
+def _get_neighbors(x, y):
+    "Get the neighbors of (x, y) in the grid"
+    return [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+
+
+def _ingrid(grid: np.ndarray, n):
+    "Is (x, y) in the grid?"
+    return 0 <= n[0] < grid.shape[0] and 0 <= n[1] < grid.shape[1]
+
+def get_empty_neighbors(grid: np.ndarray, x, y):
+    "Get the empty neighbors of (x, y) in the grid"
+    return [
+        n
+        for n in _get_neighbors(x, y)
+        if _ingrid(grid, n) and grid[n] != BLOCKED
+    ]
+
+def get_gem_pos(grid: np.ndarray, flip_y: bool = False) -> Square:
+    "Get (row, col) position of the cheese in the grid. Note that the numpy grid is flipped along the y-axis, relative to rendered images."
+    num_cheeses = (grid == GEM).sum()
+    if num_cheeses == 0:
+        return None
+    row, col = np.where(grid == GEM)
+    row, col = row[0], col[0]
+    return ((WORLD_DIM - 1) - row if flip_y else row), col
 
 def get_lock_positions(state_vals):
     lock_positions = []
@@ -827,6 +856,7 @@ def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
 
 
 
+
 def get_maze_structure(data):
     positions = []
     for i, cell in enumerate(data):
@@ -1043,7 +1073,10 @@ def venv_with_all_mouse_positions(venv):
     env_state = EnvState(sb_back)
 
     grid = env_state.inner_grid(with_mouse=False)
-    legal_mouse_positions = get_legal_mouse_positions(grid)
+    entities = env_state.state_vals["ents"]
+    legal_mouse_positions = get_legal_mouse_positions(grid,entities)
+    print(legal_mouse_positions)
+
 
     # convert coords from inner to outer grid coordinates
     padding = get_padding(grid)
@@ -1054,7 +1087,7 @@ def venv_with_all_mouse_positions(venv):
         # we keep a backup of the state bytes for efficiency, as calling set_mouse_pos
         # implicitly calls _parse_state_bytes, which is slow. this is a hack.
         # NOTE: Object orientation hurts us here. It would be better to have functions.
-        env_state.set_mouse_pos(mx + padding, my + padding)
+        env_state.set_mouse_pos(mx , my)
         state_bytes_list.append(env_state.state_bytes)
         env_state.state_bytes = sb_back
 
