@@ -9,6 +9,7 @@ import gym
 import random
 import numpy as np
 from helpers import generate_action
+import procgen
 from procgen import ProcgenGym3Env
 import imageio
 import matplotlib.pyplot as plt
