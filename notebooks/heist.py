@@ -8,7 +8,6 @@ import os
 import gym
 import random
 import numpy as np
-from helpers import generate_action
 import procgen
 from procgen import ProcgenGym3Env
 import imageio
@@ -1088,7 +1087,9 @@ def venv_with_all_mouse_positions(venv):
         # we keep a backup of the state bytes for efficiency, as calling set_mouse_pos
         # implicitly calls _parse_state_bytes, which is slow. this is a hack.
         # NOTE: Object orientation hurts us here. It would be better to have functions.
-        env_state.set_mouse_pos(mx , my)
+        noisy_mx = mx + random.uniform(-0.2, 0.2)
+        noisy_my = my + random.uniform(-0.2, 0.2)
+        env_state.set_mouse_pos(noisy_mx, noisy_my)
         state_bytes_list.append(env_state.state_bytes)
         env_state.state_bytes = sb_back
 

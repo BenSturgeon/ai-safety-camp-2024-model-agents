@@ -18,4 +18,13 @@ Since `procgen-tools` is "special" (deps are not managed well) we need to instal
 ```bash
 (to access the poetry environment in your shell for installing pip, use the command: "poetry shell")
 pip install git+https://github.com/UlisseMini/procgen-tools.git
-``` # backtesting_conversion
+```  # backtesting_conversion
+
+```
+
+To get procgen to build on a mac requires some work to get the C code to build.
+
+For this one must install qt@5 using brew and then add this to your system path so you can access it.
+
+Then, normally it makes sense to build procgen from source. I have also had to modify CMakeLists.txt to ensure that warnings are not treated as errors, and this has made building easier.
+

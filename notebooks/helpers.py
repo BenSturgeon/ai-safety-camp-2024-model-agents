@@ -465,18 +465,33 @@ def plot_multiple_observations(observation_list):
     plt.tight_layout()
     plt.show()
 
+def rgb_to_observation(rgb_image):
+    # Ensure the rgb_image is a 64x64x3 tensor
+    # assert rgb_image.shape == (64, 64, 3), "RGB image must be a 64x64x3 tensor" #Do we need this?
 
+    # Scale the rgb_image values to the range of 0 to 1
+    if isinstance(rgb_image, np.ndarray):
+        observation = rgb_image / 255.0
+        observation = observation.astype(np.float32)
+    elif torch.is_tensor(rgb_image):
+        observation = rgb_image.float() / 255.0
+    else:
+        raise TypeError("RGB image must be a numpy array or a PyTorch tensor.")
+    return observation
 
 def observation_to_rgb(observation):
     # Ensure the observation is a 64x64x3 tensor
     # assert observation.shape == (64, 64, 3), "Observation must be a 64x64x3 tensor" #Do we need this?
 
     # Scale the observation values to the range of 0 to 255
-    rgb_image = observation * 255
-
-    # Convert the tensor to uint8 data type
-    rgb_image = rgb_image.astype(np.uint8)
-
+    if isinstance(observation, np.ndarray):
+        rgb_image = observation * 255
+        rgb_image = rgb_image.astype(np.uint8)
+    elif torch.is_tensor(observation):
+        rgb_image = observation * 255
+        rgb_image = rgb_image.byte()
+    else:
+        raise TypeError("Observation must be a numpy array or a PyTorch tensor.")
     return rgb_image
 
 def tensor_to_image(tensor):
