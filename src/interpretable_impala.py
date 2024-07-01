@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class CustomCNN(nn.Module):
-    def __init__(self, obs_space, num_outputs, conv_dropout_prob=0.1, fc_dropout_prob=0.5):
+    def __init__(self, obs_space, num_outputs, conv_dropout_prob=0.01, fc_dropout_prob=0):
         super(CustomCNN, self).__init__()
 
         h, w, c = obs_space.shape
@@ -66,7 +66,7 @@ class CustomCNN(nn.Module):
         x = torch.flatten(x, start_dim=1)
 
         x = torch.relu(self.fc1(x))
-        x = self.dropout_fc(x)
+        #x = self.dropout_fc(x)
         
         x = torch.relu(self.fc2(x))
         x = self.dropout_fc(x)

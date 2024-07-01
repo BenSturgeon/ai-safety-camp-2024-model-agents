@@ -25,6 +25,8 @@ import random
 import sys
 sys.path.append('../') #This is added so we can import from the source folder
 from src.policies_impala import ImpalaCNN
+from src.interpretable_impala import CustomCNN as interpretable_CNN
+
 # from src.policies_modified import ImpalaCNN
 from src.visualisation_functions import *
 
@@ -156,6 +158,15 @@ def generate_action(model, observation, is_procgen_env=False):
 #     if is_procgen_env:
 #         return np.array([action])
 #     return action
+
+def load_interpretable_model(ImpalaCNN = interpretable_CNN, model_path ="../model_interpretable.pt"):
+    env_name = "procgen:procgen-heist-v0"  
+    env = gym.make(env_name, start_level=100, num_levels=200, render_mode="rgb_array", distribution_mode="easy") 
+    observation_space = env.observation_space
+    action_space = env.action_space.n
+    model = ImpalaCNN(observation_space, action_space)
+    model.load_from_file(model_path, device="cpu")
+    return model
 
 def load_model(ImpalaCNN = ImpalaCNN, model_path ="../model_1400_latest.pt"):
     env_name = "procgen:procgen-heist-v0"  
