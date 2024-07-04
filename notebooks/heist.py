@@ -1028,6 +1028,73 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
+
+def create_classified_dataset_venvs(num_samples_per_category=5, num_levels=0):
+    dataset = {
+        "gem": [],
+        "blue_key": [],
+        "green_key": [],
+        "red_key": [],
+        "blue_lock": [],
+        "green_lock": [],
+        "red_lock": []
+    }
+
+    key_indices = {"blue": 0, "green": 1, "red": 2}
+
+    while any(len(samples) < num_samples_per_category for samples in dataset.values()):
+        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        state = state_from_venv(venv, 0)
+        key_colors = state.get_key_colors()
+
+        if not key_colors:
+            if len(dataset["gem"]) < num_samples_per_category:
+                state_bytes = state.state_bytes
+                if state_bytes is not None:
+                    venv.env.callmethod("set_state", [state_bytes])
+                    dataset["gem"].append(venv)
+        else:
+            if "red" in key_colors:
+                if len(dataset["red_key"]) < num_samples_per_category:
+                    state.delete_keys_and_locks(3)
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["red_key"].append(venv)
+                if len(dataset["red_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["red_lock"].append(venv)
+            elif "green" in key_colors:
+                if len(dataset["green_key"]) < num_samples_per_category:
+                    state.delete_keys_and_locks(2)
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["green_key"].append(venv)
+                if len(dataset["green_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["green_lock"].append(venv)
+            elif "blue" in key_colors:
+                if len(dataset["blue_key"]) < num_samples_per_category:
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["blue_key"].append(venv)
+                if len(dataset["blue_lock"]) < num_samples_per_category:
+                    state.delete_keys()
+                    state_bytes = state.state_bytes
+                    if state_bytes is not None:
+                        venv.env.callmethod("set_state", [state_bytes])
+                        dataset["blue_lock"].append(venv)
+
+    return dataset
+
 def create_empty_maze_dataset(num_samples_per_category=5, num_levels=0, keep_player=True):
     dataset = {
         "empty_maze": []
