@@ -229,7 +229,7 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
         else:
             plt.show()
 
-def plot_activations_for_layers_rb_max(activations, layer_paths=None, save_filename_prefix=None, plot_scale_max=5):
+def plot_activations_for_layers_rb_max(activations, layer_paths=None, save_filename_prefix=None, plot_scale_max=1):
     plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
 
 
