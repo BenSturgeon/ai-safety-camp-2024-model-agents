@@ -270,6 +270,7 @@ def linear_probe_per_category_using_probes(
 
     # Function to perform linear probing
     def linear_probes(xys, model_type, test_size, random_state, **kwargs):
+        models = []
         local_results = []
         for (X, y) in xys:
             X_train, X_test, y_train, y_test = train_test_split(X.numpy(), y.numpy(), test_size=test_size, random_state=random_state)
@@ -280,7 +281,8 @@ def linear_probe_per_category_using_probes(
             accuracy = accuracy_score(y_test, y_pred)
             report = classification_report(y_test, y_pred, output_dict=True)
             local_results.append((accuracy, report))
-        return local_results
+            models.append(model)
+        return local_results, models
 
     # Prepare the data pairs
     for category in activation_dataset.keys():
@@ -298,7 +300,7 @@ def linear_probe_per_category_using_probes(
         results.append((X, y))
 
     # Use linear_probes function to conduct the probing
-    probing_results = linear_probes(results, model_type=model_type, test_size=test_size, random_state=random_state, **regression_kwargs)
+    probing_results, probes= linear_probes(results, model_type=model_type, test_size=test_size, random_state=random_state, **regression_kwargs)
 
     # Creating a DataFrame for clearer output
     results_df = pd.DataFrame({
@@ -308,7 +310,7 @@ def linear_probe_per_category_using_probes(
         
     })
 
-    return results_df
+    return results_df, probes
 
 
 
