@@ -227,19 +227,6 @@ def create_venv(
     
 
 
-# model = load_model() # load_model uses outdated model
-
-
-
-env = ProcgenGym3Env(num=1, env_name="heist", render_mode="rgb_array")
-state = env.callmethod("get_state")[0]
-
-
-modified_state = bytearray(state)
-
-
-
-
 
 DEBUG = (
     False  
