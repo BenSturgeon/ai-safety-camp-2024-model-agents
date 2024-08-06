@@ -1,0 +1,150 @@
+import helpers
+import heist
+import random
+
+
+ENTITY_COLORS = {
+    "blue": 0,
+    "green": 1,
+    "red": 2
+}
+
+ENTITY_TYPES = {
+    "key": 2,
+    "lock": 1,
+    "gem": 9,
+    "player": 0
+}
+
+ordered_layer_names  = {
+    1: 'conv1a',
+    2: 'pool1',
+    3: 'conv2a',
+    4: 'conv2b',
+    5: 'pool2',
+    6: 'conv3a',
+    7: 'pool3',
+    8: 'conv4a',
+    9: 'pool4',
+    10: 'fc1',
+    11: 'fc2',
+    12: 'fc3',
+    13: 'value_fc',
+    14: 'dropout_conv',
+    15: 'dropout_fc'
+}
+
+
+# def run_gem_steering_experiment(model_path, layer_number, modification_value, episode, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
+#     start_level = random.randint(1, 10000)
+#     venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+#     state = heist.state_from_venv(venv, 0)
+#     unchanged_obs = venv.reset()
+
+#     state_values = state.state_vals
+
+#     for ents in state_values["ents"]:
+#         if ents["image_type"].val== 9:
+#             gem_x = ents["x"].val 
+#             gem_y = ents["y"].val 
+
+#     state.remove_gem()
+
+#     state_bytes = state.state_bytes
+#     if state_bytes is not None:
+#         venv.env.callmethod("set_state", [state_bytes])
+#         modified_obs = venv.reset()
+
+#     state = heist.state_from_venv(venv, 0)
+
+#     state.set_gem_position(gem_y-.5,gem_x-.5)
+
+#     state_bytes = state.state_bytes
+
+#     if state_bytes is not None:
+#         venv.env.callmethod("set_state", [state_bytes])
+
+
+#     model = helpers.load_interpretable_model(model_path=model_path)
+#     steering_layer_unchanged = ordered_layer_names[layer_number]
+#     steering_layer = helpers.rename_path(steering_layer_unchanged)
+
+#     model_activations = helpers.ModelActivations(model)
+#     model_activations.clear_hooks()
+#     output1, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(unchanged_obs), [ordered_layer_names[layer_number]])
+#     model_activations.clear_hooks()
+#     output2, modified_obs_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), [ordered_layer_names[layer_number]])
+
+#     steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
+
+#     total_reward_steering, frames_steering, observations_steering = helpers.run_episode_with_steering_and_save_as_gif(
+#         venv, model, steering_vector, steering_layer=ordered_layer_names[layer_number],
+#         modification_value=modification_value, filepath=f'episode_steering_{episode}.gif',
+#         save_gif=save_gif, episode_timeout=episode_timeout
+#     )
+#     # helpers.plot_single_observation(observations_steering[-1])
+#     state = heist.state_from_venv(venv, 0)
+
+#     state_vals = state.state_vals
+
+#     lock_positions_after = heist.get_lock_statuses(state_vals)
+#     print(lock_positions_after)
+
+#     return total_reward_steering
+
+
+def run_entity_steering_experiment(model_path, layer_number, modification_value, episode, entity_name, entity_color=None, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
+    start_level = random.randint(1, 10000)
+    venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+    state = heist.state_from_venv(venv, 0)
+    unchanged_obs = venv.reset()
+
+    entity_type = ENTITY_TYPES.get(entity_name)
+    entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
+
+    if entity_type is None:
+        print(f"Invalid entity name: {entity_name}")
+        return None
+
+    # Move the target entity off-screen
+    state.move_entity_offscreen(entity_type, entity_theme)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        modified_obs = venv.reset()
+
+    state = heist.state_from_venv(venv, 0)
+
+    # Restore the entity to its original position
+    state.restore_entity_position(entity_type, entity_theme)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+
+    model = helpers.load_interpretable_model(model_path=model_path)
+    steering_layer_unchanged = ordered_layer_names[layer_number]
+    steering_layer = helpers.rename_path(steering_layer_unchanged)
+
+    model_activations = helpers.ModelActivations(model)
+    model_activations.clear_hooks()
+    output1, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(unchanged_obs), [ordered_layer_names[layer_number]])
+    model_activations.clear_hooks()
+    output2, modified_obs_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), [ordered_layer_names[layer_number]])
+
+    steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
+
+    total_reward_steering, frames_steering, observations_steering = helpers.run_episode_with_steering_and_save_as_gif(
+        venv, model, steering_vector, steering_layer=ordered_layer_names[layer_number],
+        modification_value=modification_value, filepath=f'episode_steering_{episode}.gif',
+        save_gif=save_gif, episode_timeout=episode_timeout
+    )
+
+    state = heist.state_from_venv(venv, 0)
+    state_vals = state.state_vals
+
+    lock_positions_after = heist.get_lock_statuses(state_vals)
+    print(lock_positions_after)
+
+    return total_reward_steering

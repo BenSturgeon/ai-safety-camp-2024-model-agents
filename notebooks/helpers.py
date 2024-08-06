@@ -4,12 +4,6 @@ import imageio
 
 
 import gym
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import VecMonitor, VecFrameStack, DummyVecEnv
-
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.callbacks import CheckpointCallback
 import torch
 
 from collections import defaultdict
@@ -452,6 +446,12 @@ def plot_layer_activations_dynamic_grid(activations, layer_name, save_filename=N
         plt.show()
 
 def plot_single_observation(observation):
+    # Convert (1, 3, 64, 64) or (3, 64, 64) to (64, 64, 3) if necessary
+    if observation.shape == (1, 3, 64, 64):
+        observation = observation.squeeze().transpose(1, 2, 0)
+    elif observation.shape == (3, 64, 64):
+        observation = observation.transpose(1, 2, 0)
+    
     plt.imshow(observation)
     plt.title("Observation")
     plt.axis('off')  
