@@ -110,8 +110,6 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     print(state.entity_exists(entity_type, entity_theme))
     unchanged_obs = venv.reset()
 
-
-
     # Save the current position of the target entity
     original_position = state.get_entity_position(entity_type, entity_theme)
 
@@ -171,15 +169,19 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
         if steps_until_pickup > 300:
             done = True
         
-        # Check if the entity has been picked up
+        # Check if the entity is a gem and evaluate the reward
         state = heist.state_from_venv(venv, 0)
 
-        if not state.entity_exists(entity_type, entity_theme):
+        if entity_type == ENTITY_TYPES['gem'] and reward > 0:
             entity_picked_up = True
             done = True
-            count_pickups +=1
+            count_pickups += 1
             print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
-        
+        elif not state.entity_exists(entity_type, entity_theme):
+            entity_picked_up = True
+            done = True
+            count_pickups += 1
+            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
 
     if save_gif:
         imageio.mimsave(f'episode_steering_{episode}.gif', frames, fps=30)
@@ -189,7 +191,6 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
         print(f"{entity_name.capitalize()} was not picked up during the episode")
     else:
         print(f"{entity_name.capitalize()} picked up during the episode")
-
 
     state = heist.state_from_venv(venv, 0)
     state_vals = state.state_vals
