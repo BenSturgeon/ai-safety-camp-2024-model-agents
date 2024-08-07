@@ -424,6 +424,16 @@ class EnvState:
 
         self.state_bytes = _serialize_maze_state(state_vals)
     
+    def entity_exists(self, entity_type, entity_theme=None):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == entity_type:
+                if entity_theme is None or ents["image_theme"].val == entity_theme:
+                    # Check if the entity is on the screen
+                    if ents["x"].val >= 0 and ents["y"].val >= 0:
+                        return True
+        return False
+    
     def remove_all_entities(self):
         state_values = self.state_vals
         for ents in state_values["ents"]:
@@ -567,16 +577,24 @@ class EnvState:
                     ents["x"].val = -1  # Move far off-screen
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
+    
+    def get_entity_position(self, entity_type, entity_theme=None):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == entity_type:
+                if entity_theme is None or ents["image_theme"].val == entity_theme:
+                    return (ents["x"].val, ents["y"].val)
+        return None  # Return None if the entity is not found
 
-    def restore_entity_position(self, entity_type, entity_theme=None):
-        if hasattr(self, 'original_position'):
-            state_values = self.state_vals
-            for ents in state_values["ents"]:
-                if ents["image_type"].val == entity_type:
-                    if entity_theme is None or ents["image_theme"].val == entity_theme:
-                        ents["x"].val, ents["y"].val = self.original_position
-            self.state_bytes = _serialize_maze_state(state_values)
-            del self.original_position
+    def restore_entity_position(self, entity_type, entity_theme=None, original_position=None):
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == entity_type:
+                if entity_theme is None or ents["image_theme"].val == entity_theme:
+                    ents["x"].val, ents["y"].val = original_position
+        self.state_bytes = _serialize_maze_state(state_values)
+    
+    
 
 
 def _get_neighbors(x, y):
@@ -681,8 +699,6 @@ def get_mouse_pos(
     return ((WORLD_DIM - 1) - row if flip_y else row), col
 
 
-
-
 def state_from_venv(venv, idx: int = 0) -> EnvState:
     """
     Get the maze state from the venv.
@@ -695,11 +711,21 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
 
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
-        try:
-            val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
-        except:
-            val = None
-            pass
+        if idx + sz > len(sb):
+            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            if fmt == '@i':  # Default for integers
+                default_val = 0
+            elif fmt == '@f':  # Default for floats
+                default_val = float('nan')  # or 0.0 depending on what makes sense for your context
+    
+            # Decide whether to advance idx or not
+            # Option 1: Do not advance idx if you want to try reading again later or handle this case differently
+            # Option 2: Advance idx to skip the expected number of bytes (more risky if data is critical)
+            idx += sz  # Uncomment this line if you choose to advance idx
+    
+            return default_val, idx
+    
+        val = struct.unpack(fmt, sb[idx : (idx + sz)])[0]
         idx += sz
         return val, idx
 

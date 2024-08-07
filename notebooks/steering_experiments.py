@@ -1,7 +1,8 @@
 import helpers
 import heist
 import random
-
+import numpy as np
+import imageio
 
 ENTITY_COLORS = {
     "blue": 0,
@@ -94,20 +95,28 @@ ordered_layer_names  = {
 
 
 def run_entity_steering_experiment(model_path, layer_number, modification_value, episode, entity_name, entity_color=None, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
-    start_level = random.randint(1, 10000)
-    venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
-    state = heist.state_from_venv(venv, 0)
-    unchanged_obs = venv.reset()
-
     entity_type = ENTITY_TYPES.get(entity_name)
     entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
-
     if entity_type is None:
         print(f"Invalid entity name: {entity_name}")
         return None
 
+    venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+    state = heist.state_from_venv(venv, 0)
+    while not state.entity_exists(entity_type, entity_theme):
+        start_level = random.randint(1, 100000)
+        venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+        state = heist.state_from_venv(venv, 0)
+    print(state.entity_exists(entity_type, entity_theme))
+    unchanged_obs = venv.reset()
+
+
+
+    # Save the current position of the target entity
+    original_position = state.get_entity_position(entity_type, entity_theme)
+
     # Move the target entity off-screen
-    state.move_entity_offscreen(entity_type, entity_theme)
+    state.remove_entity(entity_type, entity_theme)
 
     state_bytes = state.state_bytes
     if state_bytes is not None:
@@ -117,7 +126,8 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     state = heist.state_from_venv(venv, 0)
 
     # Restore the entity to its original position
-    state.restore_entity_position(entity_type, entity_theme)
+    state.restore_entity_position(entity_type, entity_theme, original_position)
+    print(state.entity_exists(entity_type, entity_theme))
 
     state_bytes = state.state_bytes
     if state_bytes is not None:
@@ -135,11 +145,51 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
 
     steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
 
-    total_reward_steering, frames_steering, observations_steering = helpers.run_episode_with_steering_and_save_as_gif(
-        venv, model, steering_vector, steering_layer=ordered_layer_names[layer_number],
-        modification_value=modification_value, filepath=f'episode_steering_{episode}.gif',
-        save_gif=save_gif, episode_timeout=episode_timeout
-    )
+    observation = venv.reset()
+    done = False
+    total_reward = 0
+    frames = []
+    observations = []
+    count = 0
+    entity_picked_up = False
+    count_pickups = 0
+    steps_until_pickup = 0
+
+    while not done:
+        if save_gif:
+            frames.append(venv.render(mode='rgb_array'))
+        
+        observation = np.squeeze(observation)
+        observation = np.transpose(observation, (1, 2, 0))
+        converted_obs = helpers.observation_to_rgb(observation)
+        action = helpers.generate_action_with_steering(model, converted_obs, steering_vector, steering_layer, modification_value, is_procgen_env=True)
+
+        observation, reward, done, info = venv.step(action)
+        total_reward += reward
+        observations.append(converted_obs)
+        steps_until_pickup += 1
+        if steps_until_pickup > 300:
+            done = True
+        
+        # Check if the entity has been picked up
+        state = heist.state_from_venv(venv, 0)
+
+        if not state.entity_exists(entity_type, entity_theme):
+            entity_picked_up = True
+            done = True
+            count_pickups +=1
+            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
+        
+
+    if save_gif:
+        imageio.mimsave(f'episode_steering_{episode}.gif', frames, fps=30)
+        print("Saved gif!")
+
+    if not entity_picked_up:
+        print(f"{entity_name.capitalize()} was not picked up during the episode")
+    else:
+        print(f"{entity_name.capitalize()} picked up during the episode")
+
 
     state = heist.state_from_venv(venv, 0)
     state_vals = state.state_vals
@@ -147,4 +197,4 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     lock_positions_after = heist.get_lock_statuses(state_vals)
     print(lock_positions_after)
 
-    return total_reward_steering
+    return total_reward, steps_until_pickup, count_pickups
