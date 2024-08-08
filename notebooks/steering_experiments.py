@@ -93,7 +93,6 @@ ordered_layer_names  = {
 
 #     return total_reward_steering
 
-
 def run_entity_steering_experiment(model_path, layer_number, modification_value, episode, entity_name, entity_color=None, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
     entity_type = ENTITY_TYPES.get(entity_name)
     entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
@@ -152,7 +151,11 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     entity_picked_up = False
     count_pickups = 0
     steps_until_pickup = 0
-
+    
+    # Count initial number of target entities
+    initial_state = heist.state_from_venv(venv, 0)
+    initial_entity_count = initial_state.count_entities(entity_type, entity_theme)
+    
     while not done:
         if save_gif:
             frames.append(venv.render(mode='rgb_array'))
@@ -169,15 +172,15 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
         if steps_until_pickup > 300:
             done = True
         
-        # Check if the entity is a gem and evaluate the reward
         state = heist.state_from_venv(venv, 0)
+        current_entity_count = state.count_entities(entity_type, entity_theme)
 
-        if entity_type == ENTITY_TYPES['gem'] and reward > 0:
+        if current_entity_count < initial_entity_count:
             entity_picked_up = True
             done = True
             count_pickups += 1
             print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
-        elif not state.entity_exists(entity_type, entity_theme):
+        elif entity_type == ENTITY_TYPES['gem'] and reward > 0:
             entity_picked_up = True
             done = True
             count_pickups += 1

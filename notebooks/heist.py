@@ -594,6 +594,17 @@ class EnvState:
                     ents["x"].val, ents["y"].val = original_position
         self.state_bytes = _serialize_maze_state(state_values)
     
+    def count_entities(self, entity_type, entity_theme=None):
+        count = 0
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            if ents["image_type"].val == entity_type:
+                if entity_theme is None or ents["image_theme"].val == entity_theme:
+                    # Check if the entity is on the screen
+                    if ents["x"].val >= 0 and ents["y"].val >= 0:
+                        count += 1
+        return count
+    
     
 
 
