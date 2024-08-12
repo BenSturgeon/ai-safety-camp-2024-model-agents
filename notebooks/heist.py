@@ -14,12 +14,19 @@ import imageio
 import matplotlib.pyplot as plt
 import typing
 import math
-
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..', 'src')))
 from procgen import ProcgenGym3Env
 import struct
 import typing
 from typing import Tuple, Dict, Callable, List, Optional
 from dataclasses import dataclass
+import sys
+import os
+
+
+
 from src.policies_impala import ImpalaCNN
 from procgen_tools.procgen_wrappers import VecExtractDictObs, TransposeFrame, ScaledFloatFrame
 
@@ -723,7 +730,7 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
         if idx + sz > len(sb):
-            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            # print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
             if fmt == '@i':  # Default for integers
                 default_val = 0
             elif fmt == '@f':  # Default for floats
@@ -797,7 +804,7 @@ def _parse_maze_state_bytes_handling_buffer_error(state_bytes: bytes, assert_=DE
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
         if idx + sz > len(sb):
-            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
+            # print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
             if fmt == '@i':  # Default for integers
                 default_val = 0
             elif fmt == '@f':  # Default for floats
@@ -916,7 +923,6 @@ def get_keys(state_values):
     positions = {}
     for ents in state_values["ents"]:
         if ents["image_type"].val== 2:
-            print(ents)
             if ents["x"].val > 1 or ents["y"].val > 1: 
                 positions[ents["image_theme"].val] = {"x" :ents["x"].val, "y" :ents["y"].val}
     return positions
@@ -1190,7 +1196,6 @@ def venv_with_all_mouse_positions(venv):
     grid = env_state.inner_grid(with_mouse=False)
     entities = env_state.state_vals["ents"]
     legal_mouse_positions = get_legal_mouse_positions(grid,entities)
-    print(legal_mouse_positions)
 
 
     # convert coords from inner to outer grid coordinates
