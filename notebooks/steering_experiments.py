@@ -202,3 +202,56 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     print(lock_positions_after)
 
     return total_reward, steps_until_pickup, count_pickups
+def steering_vector(venv, model_path, layer_number, steering_channel, modification_value, episode, entity_name, entity_color=None, num_levels=0, start_level=5, episode_timeout=200, save_gif=False, filepath= '../gifs/unsteered_run.gif'):
+    model = helpers.load_interpretable_model(model_path=model_path)
+    original_env = venv
+    state = heist.state_from_venv(venv, 0)
+    env_state = heist.EnvState(state.state_bytes)
+    entity_type = ENTITY_TYPES.get(entity_name)
+    entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
+    print(entity_theme)
+    original_position = env_state.get_key_position(entity_theme)
+    unchanged_obs = venv.reset()
+    unsteered_actions = helpers.run_episode_and_save_as_gif(env=original_env,model=model, save_gif=save_gif, filepath=filepath + "unsteered.gif")
+
+
+    if entity_type is None:
+        print(f"Invalid entity name: {entity_name}")
+        return None
+    
+    # Move the target entity off-screen
+    state.move_entity_offscreen(entity_type, entity_theme)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        modified_obs = venv.reset()
+
+    state = heist.state_from_venv(venv, 0)
+
+    # Restore the entity to its original position
+    state.restore_entity_position(entity_type, entity_theme)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+
+    
+    steering_layer_unchanged = ordered_layer_names[layer_number]
+    steering_layer = helpers.rename_path(steering_layer_unchanged)
+
+    model_activations = helpers.ModelActivations(model)
+    model_activations.clear_hooks()
+    output1, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(unchanged_obs), [ordered_layer_names[layer_number]])
+    model_activations.clear_hooks()
+    output2, modified_obs_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), [ordered_layer_names[layer_number]])
+
+    steering_vector = unmodified_activations[steering_layer][0] - modified_obs_activations[steering_layer][0]
+
+    actions = helpers.run_episode_with_steering_channels_and_save_as_gif(
+        venv, model, steering_vector, steering_layer=ordered_layer_names[layer_number],
+        steering_channel = steering_channel, modification_value=modification_value, filepath=filepath + "steered.gif",
+        save_gif=save_gif, episode_timeout=episode_timeout
+    )
+
+    return steering_vector, original_position
