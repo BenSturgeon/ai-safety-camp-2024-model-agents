@@ -3,6 +3,7 @@ import heist
 import random
 import numpy as np
 import imageio
+import torch
 
 ENTITY_COLORS = {
     "blue": 0,
@@ -252,6 +253,7 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
     lock_positions_after = heist.get_lock_statuses(state_vals)
 
     return total_reward, steps_until_pickup, count_pickups
+
 def steering_vector(venv, model_path, layer_number, steering_channel, modification_value, episode, entity_name, entity_color=None, num_levels=0, start_level=5, episode_timeout=200, save_gif=False, filepath= '../gifs/unsteered_run.gif'):
     model = helpers.load_interpretable_model(model_path=model_path)
     original_env = venv
@@ -305,3 +307,134 @@ def steering_vector(venv, model_path, layer_number, steering_channel, modificati
     )
 
     return steering_vector, original_position
+
+def create_patched_steering_vector(original_vector, patch_position, patch_value, grid_size=(8, 8)):
+    # Ensure the original vector is flattened
+    flattened_vector = original_vector.flatten()
+    
+    # Calculate the index in the flattened vector corresponding to the patch position
+    index = patch_position[0] * grid_size[1] + patch_position[1]
+    
+    # Create a new vector with the same values as the original
+    patched_vector = torch.zeros_like(flattened_vector)
+    
+    # Set the value at the specified position
+    patched_vector[index] = patch_value
+    
+    # Reshape the vector back to the original grid size
+    reshaped_vector = patched_vector.reshape(grid_size)
+    
+    return reshaped_vector
+
+def run_patching_experiment(model_path, layer_number, episode, channel, patch_position, patch_value, entity_name, entity_color=None, num_levels=0, start_level = random.randint(1, 100000), episode_timeout=200, save_gif=False):
+    entity_type = ENTITY_TYPES.get(entity_name)
+    entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
+    if entity_type is None:
+        print(f"Invalid entity name: {entity_name}")
+        return None
+
+    venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+    state = heist.state_from_venv(venv, 0)
+    while not state.entity_exists(entity_type, entity_theme):
+        start_level = random.randint(1, 100000)
+        venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
+        state = heist.state_from_venv(venv, 0)
+    print(state.entity_exists(entity_type, entity_theme))
+    unchanged_obs = venv.reset()
+
+    # Save the current position of the target entity
+    original_position = state.get_entity_position(entity_type, entity_theme)
+
+    # Move the target entity off-screen
+    state.remove_entity(entity_type, entity_theme)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        modified_obs = venv.reset()
+
+    state = heist.state_from_venv(venv, 0)
+
+    # Restore the entity to its original position
+    state.restore_entity_position(entity_type, entity_theme, original_position)
+
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+
+    model = helpers.load_interpretable_model(model_path=model_path)
+    steering_layer_unchanged = ordered_layer_names[layer_number]
+    steering_layer = helpers.rename_path(steering_layer_unchanged)
+
+    model_activations = helpers.ModelActivations(model)
+    model_activations.clear_hooks()
+    output1, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(unchanged_obs), [ordered_layer_names[layer_number]])
+    model_activations.clear_hooks()
+    output2, modified_obs_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), [ordered_layer_names[layer_number]])
+
+    steering_vector = unmodified_activations[steering_layer][0][channel] - modified_obs_activations[steering_layer][0][channel]
+
+
+    # Create the patched steering vector
+    patched_steering_vector = create_patched_steering_vector(steering_vector, patch_position, patch_value)
+
+
+    observation = venv.reset()
+    done = False
+    total_reward = 0
+    frames = []
+    observations = []
+    count = 0
+    entity_picked_up = False
+    count_pickups = 0
+    steps_until_pickup = 0
+    
+    # Count initial number of target entities
+    initial_state = heist.state_from_venv(venv, 0)
+    initial_entity_count = initial_state.count_entities(entity_type, entity_theme)
+    
+    while not done:
+        if save_gif:
+            frames.append(venv.render(mode='rgb_array'))
+        
+        observation = np.squeeze(observation)
+        observation = np.transpose(observation, (1, 2, 0))
+        converted_obs = helpers.observation_to_rgb(observation)
+        action = helpers.generate_action_with_patching(model, converted_obs, patched_steering_vector, steering_layer, is_procgen_env=True)
+
+        observation, reward, done, info = venv.step(action)
+        total_reward += reward
+        observations.append(converted_obs)
+        steps_until_pickup += 1
+        if steps_until_pickup > 150:
+            done = True
+        
+        state = heist.state_from_venv(venv, 0)
+        current_entity_count = state.count_entities(entity_type, entity_theme)
+
+        if current_entity_count < initial_entity_count:
+            entity_picked_up = True
+            done = True
+            count_pickups += 1
+            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
+        elif entity_type == ENTITY_TYPES['gem'] and reward > 0:
+            entity_picked_up = True
+            done = True
+            count_pickups += 1
+            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
+
+    if save_gif:
+        imageio.mimsave(f'episode_patching_{episode}_green__key_layer_8_channel_{channel}.gif', frames, fps=30)
+        print("Saved gif!")
+
+    if not entity_picked_up:
+        print(f"{entity_name.capitalize()} was not picked up during the episode")
+    else:
+        print(f"{entity_name.capitalize()} picked up during the episode")
+
+    state = heist.state_from_venv(venv, 0)
+    state_vals = state.state_vals
+
+    lock_positions_after = heist.get_lock_statuses(state_vals)
+
+    return total_reward, steps_until_pickup, count_pickups
