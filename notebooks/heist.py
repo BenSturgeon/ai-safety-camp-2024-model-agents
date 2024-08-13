@@ -723,7 +723,6 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
         if idx + sz > len(sb):
-            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
             if fmt == '@i':  # Default for integers
                 default_val = 0
             elif fmt == '@f':  # Default for floats
@@ -797,7 +796,6 @@ def _parse_maze_state_bytes_handling_buffer_error(state_bytes: bytes, assert_=DE
     def read_fixed(sb, idx, fmt):
         sz = struct.calcsize(fmt)
         if idx + sz > len(sb):
-            print(f"Warning: Buffer underflow at index {idx} with size {sz}, buffer length {len(sb)}. Returning default value.")
             if fmt == '@i':  # Default for integers
                 default_val = 0
             elif fmt == '@f':  # Default for floats
