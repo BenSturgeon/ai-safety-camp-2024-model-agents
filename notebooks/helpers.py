@@ -740,6 +740,55 @@ class ModelActivations:
 
 
 @torch.no_grad()
+def generate_action_with_patching(model, observation, patched_vector, steering_layer, is_procgen_env=False):
+    # Check for available devices
+    device = None
+    xm = None
+    
+    
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print("Running on CUDA")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+            print("Running on MPS")
+        else:
+            device = torch.device("cpu")
+            # print("Running on CPU")
+    
+    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+        
+    # Define the steering hook function
+    def steering_hook(module, input, output):
+        # Add the steering vector to the output activations
+        modified_output = output + (patched_vector.unsqueeze(0))
+        return modified_output
+
+    # Register the steering hook to the specified layer
+    named_modules_dict = dict(model.named_modules())
+    target_layer = named_modules_dict[steering_layer]
+    steering_handle = target_layer.register_forward_hook(steering_hook)
+
+    # Forward pass with steering
+    model_output = model(observation)
+
+    # Remove the steering hook
+    steering_handle.remove()
+
+    logits = model_output[0].logits  # discard the output of the critic in our actor critic network
+    probabilities = torch.softmax(logits, dim=-1)
+    action = torch.multinomial(probabilities, 1).item()
+
+    # If using TPU, we need to explicitly synchronize the device
+    if xm is not None:
+        xm.mark_step()
+
+    if is_procgen_env:
+        return np.array([action])
+    return action
+
+@torch.no_grad()
 def generate_action_with_steering(model, observation, steering_vector, steering_layer, modification_value, is_procgen_env=False):
     # Check for available devices
     device = None
