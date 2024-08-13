@@ -308,20 +308,14 @@ def steering_vector(venv, model_path, layer_number, steering_channel, modificati
 
     return steering_vector, original_position
 
-def create_patched_steering_vector(original_vector, patch_position, patch_value, grid_size=(8, 8)):
-    # Ensure the original vector is flattened
-    flattened_vector = original_vector.flatten()
-    
-    # Calculate the index in the flattened vector corresponding to the patch position
-    index = patch_position[0] * grid_size[1] + patch_position[1]
-    
-    # Create a new vector with the same values as the original
-    patched_vector = torch.zeros_like(flattened_vector)
+def create_patched_steering_vector(original_vector, patch_position, patch_value, grid_size=(8,8)):
+    # Create a copy of the original vector
+    patched_vector = original_vector.clone()
     
     # Set the value at the specified position
-    patched_vector[index] = patch_value
+    patched_vector[patch_position[0], patch_position[1]] = patch_value
     
-    # Reshape the vector back to the original grid size
+    # Reshape the vector to ensure it matches the grid size
     reshaped_vector = patched_vector.reshape(grid_size)
     
     return reshaped_vector
@@ -424,7 +418,7 @@ def run_patching_experiment(model_path, layer_number, episode, channel, patch_po
             print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
 
     if save_gif:
-        imageio.mimsave(f'episode_patching_{episode}_green__key_layer_8_channel_{channel}.gif', frames, fps=30)
+        imageio.mimsave(f'gifs/episode_patching_{episode}_green__key_layer_{layer_number}_channel_{channel}_grid_{patch_position[0]}_{patch_position[1]}.gif', frames, fps=30)
         print("Saved gif!")
 
     if not entity_picked_up:
