@@ -1015,7 +1015,7 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
     
 
     while any(len(samples) < num_samples_per_category for samples in dataset.values()):
-        venv = create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=num_levels)
+        venv = create_venv(num=1, start_level=random.randint(1, 1000000), num_levels=num_levels)
         state = state_from_venv(venv, 0)
         key_colors = state.get_key_colors()
 
