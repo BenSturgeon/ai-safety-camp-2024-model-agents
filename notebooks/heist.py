@@ -1082,7 +1082,6 @@ def create_classified_dataset(num_samples_per_category=5, num_levels=0):
 
     return dataset
 
-
 def create_classified_dataset_venvs(num_samples_per_category=5, num_levels=0):
     dataset = {
         "gem": [],
@@ -1106,46 +1105,77 @@ def create_classified_dataset_venvs(num_samples_per_category=5, num_levels=0):
                 state_bytes = state.state_bytes
                 if state_bytes is not None:
                     venv.env.callmethod("set_state", [state_bytes])
+                    venv.reset()
                     dataset["gem"].append(venv)
+                else:
+                    venv.close()
         else:
             if "red" in key_colors:
                 if len(dataset["red_key"]) < num_samples_per_category:
-                    state.delete_keys_and_locks(3)
+                    state.delete_keys_and_locks(3)  # Remove blue and green, keep red
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["red_key"].append(venv)
-                if len(dataset["red_lock"]) < num_samples_per_category:
+                    else:
+                        venv.close()
+                elif len(dataset["red_lock"]) < num_samples_per_category:
                     state.delete_keys()
+                    state.delete_specific_locks([key_indices["blue"], key_indices["green"]])  # Remove blue and green locks
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["red_lock"].append(venv)
+                    else:
+                        venv.close()
+                else:
+                    venv.close()
             elif "green" in key_colors:
                 if len(dataset["green_key"]) < num_samples_per_category:
-                    state.delete_keys_and_locks(2)
+                    state.delete_keys_and_locks(2)  # Remove blue, keep green
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["green_key"].append(venv)
-                if len(dataset["green_lock"]) < num_samples_per_category:
+                    else:
+                        venv.close()
+                elif len(dataset["green_lock"]) < num_samples_per_category:
                     state.delete_keys()
+                    state.delete_specific_locks([key_indices["blue"]])  # Remove blue locks
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["green_lock"].append(venv)
+                    else:
+                        venv.close()
+                else:
+                    venv.close()
             elif "blue" in key_colors:
                 if len(dataset["blue_key"]) < num_samples_per_category:
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["blue_key"].append(venv)
-                if len(dataset["blue_lock"]) < num_samples_per_category:
+                    else:
+                        venv.close()
+                elif len(dataset["blue_lock"]) < num_samples_per_category:
                     state.delete_keys()
                     state_bytes = state.state_bytes
                     if state_bytes is not None:
                         venv.env.callmethod("set_state", [state_bytes])
+                        venv.reset()
                         dataset["blue_lock"].append(venv)
+                    else:
+                        venv.close()
+                else:
+                    venv.close()
+            else:
+                venv.close()
 
     return dataset
 
