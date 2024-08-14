@@ -18,6 +18,16 @@ ENTITY_TYPES = {
     "player": 0
 }
 
+# Constants
+KEY_COLORS = {0: 'blue',1: 'green',2: 'red',}
+MOUSE = 0
+KEY = 2
+LOCKED_DOOR = 1
+WORLD_DIM = 25
+EMPTY = 100
+BLOCKED = 51
+GEM= 9
+
 ordered_layer_names  = {
     1: 'conv1a',
     2: 'pool1',
@@ -36,13 +46,154 @@ ordered_layer_names  = {
     15: 'dropout_fc'
 }
 
+def create_corridor_environment(entity_one, entity_two, corridor_length=9):
+    # Keep recreating the environment until we find one with a red key
+    while True:
+        venv = heist.create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=0)
+        state = heist.state_from_venv(venv, 0)
+        if state.entity_exists(ENTITY_TYPES['key'], ENTITY_COLORS['red']):
+            break
 
-def run_entity_steering_experiment_by_channel(model_path, layer_number, modification_value, episode, channel, entity_name, entity_color=None, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
+    # Get the full grid and its dimensions
+    full_grid = state.full_grid(with_mouse=False)
+    height, width = full_grid.shape
+
+    # Calculate the middle of the grid
+    middle_y = height // 2
+
+    # Define the corridor
+    corridor_start_x = 0
+    corridor_end_x = 8
+    corridor_y = middle_y
+
+    # Create a new grid with walls everywhere except for the corridor
+    new_grid = np.full_like(full_grid, BLOCKED)
+    new_grid[corridor_y] = EMPTY
+
+    # Set the new grid
+    state.set_grid(new_grid)
+
+    # Place the player in the middle of the corridor
+    # Store original positions of entities before removing them
+    original_positions = {}
+    for ent in state.state_vals["ents"]:
+        if ent["image_type"].val in [ENTITY_TYPES["key"], ENTITY_TYPES["lock"], ENTITY_TYPES["gem"]]:
+            key = (ent["image_type"].val, ent["image_theme"].val)
+            original_positions[key] = (ent["x"].val, ent["y"].val)
+
+    # Remove all entities (which moves them off-screen)
+    state.remove_all_entities()
+
+
+    player_x = corridor_y
+    player_y = corridor_length // 2
+    state.set_mouse_pos(player_x, player_y)
+
+    # Get entity types and colors
+    entity_one_type, entity_one_color = entity_one
+    entity_two_type, entity_two_color = entity_two
+
+    # Function to restore entity to the corridor
+    def restore_entity_to_corridor(entity_type, entity_color, x_pos):
+        key = (ENTITY_TYPES[entity_type], ENTITY_COLORS[entity_color])
+        if key in original_positions:
+            state.set_entity_position(ENTITY_TYPES[entity_type], ENTITY_COLORS[entity_color], corridor_y, x_pos)
+
+    # Restore entity one to the start of the corridor
+    restore_entity_to_corridor(entity_one_type, entity_one_color, corridor_start_x )
+
+    # Restore entity two to the end of the corridor
+    restore_entity_to_corridor(entity_two_type, entity_two_color, corridor_end_x )
+
+    # Update the environment with the new state
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        venv.reset()
+
+    return venv
+
+def compare_first_key_collected(model_path, layer_number, channel, modification_value, num_episodes=100, corridor_length=9, max_steps=100):
+    model = helpers.load_interpretable_model(model_path)
+    blue_key_collected_first = 0
+    green_key_collected_first = 0
+    no_key_collected = 0
+
+    steering_layer = helpers.rename_path(ordered_layer_names[layer_number])
+
+    for episode in range(num_episodes):
+        venv = create_corridor_environment(
+            entity_one=("key", "blue"),
+            entity_two=("key", "green"),
+            corridor_length=corridor_length
+        )
+        
+        obs = venv.reset()
+        done = False
+        steps = 0
+        
+        # Generate steering vector
+        state = heist.state_from_venv(venv)
+        original_blue_pos = state.get_entity_position(ENTITY_TYPES["key"], ENTITY_COLORS["blue"])
+        
+        # Temporarily remove blue key to generate steering vector
+        state.remove_entity(ENTITY_TYPES["key"], ENTITY_COLORS["blue"])
+        state_bytes = state.state_bytes
+        venv.env.callmethod("set_state", [state_bytes])
+        modified_obs = venv.reset()
+        
+        # Restore blue key
+        state.restore_entity_position(ENTITY_TYPES["key"], ENTITY_COLORS["blue"], original_blue_pos)
+        state_bytes = state.state_bytes
+        venv.env.callmethod("set_state", [state_bytes])
+        
+        # Calculate steering vector
+        model_activations = helpers.ModelActivations(model)
+        _, unmodified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(obs), [steering_layer])
+        _, modified_activations = model_activations.run_with_cache(helpers.observation_to_rgb(modified_obs), [steering_layer])
+        
+        steering_vector = unmodified_activations[steering_layer][0][channel] - modified_activations[steering_layer][0][channel]
+        
+        while not done and steps < max_steps:
+            action = heist.generate_steering_action(model, obs, steering_vector, steering_layer, channel, modification_value)
+            
+            obs, reward, done, info = venv.step(action)
+            steps += 1
+            
+            if reward > 0:  # A key was collected
+                state = heist.state_from_venv(venv)
+                remaining_keys = [ent for ent in state.state_vals["ents"] if ent["image_type"].val == ENTITY_TYPES["key"]]
+                
+                if len(remaining_keys) == 1:
+                    if remaining_keys[0]["image_theme"].val == ENTITY_COLORS["blue"]:
+                        green_key_collected_first += 1
+                    else:
+                        blue_key_collected_first += 1
+                break
+        
+        if steps == max_steps:
+            no_key_collected += 1
+        
+        venv.close()
+
+    results = {
+        "blue_key_collected_first": blue_key_collected_first,
+        "green_key_collected_first": green_key_collected_first,
+        "no_key_collected": no_key_collected,
+        "total_episodes": num_episodes
+    }
+    
+    return results
+
+def run_entity_steering_experiment_by_channel(model_path, layer_number, modification_value, episode, channel, entity_name, entity_color=None, num_levels=1, start_level=None, episode_timeout=200, save_gif=False):
     entity_type = ENTITY_TYPES.get(entity_name)
     entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
     if entity_type is None:
         print(f"Invalid entity name: {entity_name}")
         return None
+    
+    if start_level == None:
+        start_level = random.randint(1, 100000)
 
     venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
     state = heist.state_from_venv(venv, 0)
@@ -131,7 +282,7 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
             print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
 
     if save_gif:
-        imageio.mimsave(f'episode_steering_{episode}_green__key_layer_30.gif', frames, fps=30)
+        imageio.mimsave(f'gifs/episode_steering_{episode}_{entity_color}_{entity_name}_layer_{layer_number}.gif', frames, fps=30)
         print("Saved gif!")
 
     if not entity_picked_up:
@@ -146,7 +297,7 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
 
     return total_reward, steps_until_pickup, count_pickups
 
-def run_entity_steering_experiment(model_path, layer_number, modification_value, episode, entity_name, entity_color=None, num_levels=1, start_level=5, episode_timeout=200, save_gif=False):
+def run_entity_steering_experiment(model_path, layer_number, modification_value, episode, entity_name, entity_color=None, num_levels=1, start_level = random.randint(1, 100000), episode_timeout=200, save_gif=False):
     entity_type = ENTITY_TYPES.get(entity_name)
     entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
     if entity_type is None:
@@ -418,7 +569,7 @@ def run_patching_experiment(model_path, layer_number, episode, channel, patch_po
             print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
 
     if save_gif:
-        imageio.mimsave(f'gifs/episode_patching_{episode}_green__key_layer_{layer_number}_channel_{channel}_grid_{patch_position[0]}_{patch_position[1]}.gif', frames, fps=30)
+        imageio.mimsave(f'gifs/episode_patching_{episode}_green_key_layer_{layer_number}_channel_{channel}_grid_{patch_position[0]}_{patch_position[1]}_{patch_value}.gif', frames, fps=30)
         print("Saved gif!")
 
     if not entity_picked_up:

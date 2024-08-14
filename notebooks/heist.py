@@ -44,6 +44,21 @@ EMPTY = 100
 BLOCKED = 51
 GEM= 9
 
+
+ENTITY_COLORS = {
+    "blue": 0,
+    "green": 1,
+    "red": 2
+}
+
+ENTITY_TYPES = {
+    "key": 2,
+    "lock": 1,
+    "gem": 9,
+    "player": 0
+}
+
+
 HEIST_STATE_DICT_TEMPLATE = [
     ["int", "SERIALIZE_VERSION"],
     ["string", "game_name"],
@@ -377,6 +392,55 @@ class EnvState:
         
         return key_colors
 
+    def add_entity(self, entity_type, entity_theme, x, y):
+        """
+        Add a new entity to the environment.
+        
+        :param entity_type: The type of entity (e.g., ENTITY_TYPES['key'])
+        :param entity_theme: The theme/color of the entity (e.g., ENTITY_COLORS['blue'])
+        :param x: The x-coordinate of the entity
+        :param y: The y-coordinate of the entity
+        """
+        state_values = self.state_vals
+        new_entity = {
+            "x": StateValue(float(y) + 0.5, 0),
+            "y": StateValue(float(x) + 0.5, 0),
+            "vx": StateValue(0.0, 0),
+            "vy": StateValue(0.0, 0),
+            "rx": StateValue(0.0, 0),
+            "ry": StateValue(0.0, 0),
+            "type": StateValue(entity_type, 0),
+            "image_type": StateValue(entity_type, 0),
+            "image_theme": StateValue(entity_theme, 0),
+            "render_z": StateValue(0, 0),
+            "will_erase": StateValue(0, 0),
+            "collides_with_entities": StateValue(1, 0),
+            "collision_margin": StateValue(0.0, 0),
+            "rotation": StateValue(0.0, 0),
+            "vrot": StateValue(0.0, 0),
+            "is_reflected": StateValue(0, 0),
+            "fire_time": StateValue(0, 0),
+            "spawn_time": StateValue(0, 0),
+            "life_time": StateValue(0, 0),
+            "expire_time": StateValue(0, 0),
+            "use_abs_coords": StateValue(0, 0),
+            "friction": StateValue(0.0, 0),
+            "smart_step": StateValue(0, 0),
+            "avoids_collisions": StateValue(0, 0),
+            "auto_erase": StateValue(0, 0),
+            "alpha": StateValue(1.0, 0),
+            "health": StateValue(1.0, 0),
+            "theta": StateValue(0.0, 0),
+            "grow_rate": StateValue(0.0, 0),
+            "alpha_decay": StateValue(0.0, 0),
+            "climber_spawn_x": StateValue(0.0, 0),
+        }
+        
+        state_values["ents"].append(new_entity)
+        state_values["ents.size"].val += 1
+        self.state_bytes = _serialize_maze_state(state_values)
+
+
 
     def set_key_position(self, key_index, x, y):
         state_values = self.state_vals
@@ -612,7 +676,8 @@ class EnvState:
                         count += 1
         return count
     
-    
+
+
 
 
 def _get_neighbors(x, y):
