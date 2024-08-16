@@ -223,6 +223,48 @@ def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=N
         else:
             plt.show()
 
+def plot_activations_for_channel(activations, layer_name, save_filename_prefix=None):
+    # Check if the specified layer's activations are available
+    if layer_name not in activations:
+        print(f"No activations found for layer: {layer_name}")
+        return None
+
+    # Extract the activation tensor for the specified layer from the tuple
+    activation_tensor = activations[layer_name][0]
+
+    # The tensor is 3-dimensional [channels, height, width]
+    num_activations = activation_tensor.shape[0]  # Number of activation maps
+
+    for activation_idx in range(num_activations):
+        # Create a new figure for each channel
+        fig, ax = plt.subplots(figsize=(3, 3))
+        
+        # Plot the activation map
+        im = ax.imshow(activation_tensor[activation_idx, :, :], cmap='viridis', aspect='auto')
+        # ax.set_title(f'Filter {activation_idx} {layer_name}', fontsize=10)
+        ax.axis('off')  # Hide axes for a cleaner look
+        
+        # Add colorbar
+        # plt.colorbar(im, ax=ax)
+
+        plt.tight_layout()
+        
+        # Save or show the plot
+        if save_filename_prefix:
+            save_filename = f"{save_filename_prefix}_{layer_name}_filter{activation_idx+1}.png"
+            plt.savefig(save_filename)
+            plt.close()
+        else:
+            plt.show()
+    
+    # Save or show the plot
+    if save_filename_prefix:
+        save_filename = f"{save_filename_prefix}_{layer_name}.png"
+        plt.savefig(save_filename)
+        plt.close()
+    else:
+        plt.show()
+
 def plot_activations_for_layers_rb_max(activations, layer_paths=None, save_filename_prefix=None, plot_scale_max=1):
     plt.rcParams['image.cmap'] = 'RdBu_r'  # Set the reversed default colormap to 'RdBu_r' for all plots
 
@@ -453,7 +495,7 @@ def plot_single_observation(observation):
         observation = observation.transpose(1, 2, 0)
     
     plt.imshow(observation)
-    plt.title("Observation")
+    # plt.title("Observation")
     plt.axis('off')  
     plt.show()
 
@@ -516,7 +558,7 @@ def rename_path(path):
 
 def plot_confusion_matrix(conf_matrix, labels_dict):
     # Define the size of the figure
-    plt.figure(figsize=(10, 7))
+    plt.figure(figsize=(3, 3))
 
     # Convert labels_dict keys to a list for x and y axis labels
     labels = list(labels_dict.keys())
@@ -749,13 +791,10 @@ def generate_action_with_patching(model, observation, patched_vector, steering_l
     if device is None:
         if torch.cuda.is_available():
             device = torch.device("cuda")
-            print("Running on CUDA")
         elif torch.backends.mps.is_available():
             device = torch.device("mps")
-            print("Running on MPS")
         else:
             device = torch.device("cpu")
-            # print("Running on CPU")
     
     observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
         
@@ -805,13 +844,11 @@ def generate_action_with_steering(model, observation, steering_vector, steering_
     if device is None:
         if torch.cuda.is_available():
             device = torch.device("cuda")
-            print("Running on CUDA")
         elif torch.backends.mps.is_available():
             device = torch.device("mps")
-            print("Running on MPS")
         else:
             device = torch.device("cpu")
-            # print("Running on CPU")
+
     
     # Move model to the appropriate device
     # model = model.to(device)

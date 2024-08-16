@@ -113,6 +113,79 @@ def create_corridor_environment(entity_one, entity_two, corridor_length=9):
 
     return venv
 
+def create_corridor_with_corner_environment(entity_one, entity_two, corridor_length=9):
+    # Keep recreating the environment until we find one with a red key
+    while True:
+        venv = heist.create_venv(num=1, start_level=random.randint(1000, 10000), num_levels=0)
+        state = heist.state_from_venv(venv, 0)
+        if state.entity_exists(ENTITY_TYPES['key'], ENTITY_COLORS['red']):
+            break
+
+    # Get the full grid and its dimensions
+    full_grid = state.full_grid(with_mouse=False)
+    height, width = full_grid.shape
+
+    # Calculate the middle of the grid
+    middle_y = height // 2
+
+    # Define the corridor
+    corridor_start_x = 0
+    corridor_end_x = 8
+    corridor_y = middle_y
+
+    # Create a new grid with walls everywhere except for the corridor
+    new_grid = np.full_like(full_grid, BLOCKED)
+    new_grid[corridor_y] = EMPTY
+    new_grid[0,8] = EMPTY
+    new_grid[1,8] = EMPTY
+    new_grid[2,8] = EMPTY
+    new_grid[3,8] = EMPTY
+    new_grid[4,8] = EMPTY
+
+
+    # Set the new grid
+    state.set_grid(new_grid)
+
+    # Place the player in the middle of the corridor
+    # Store original positions of entities before removing them
+    original_positions = {}
+    for ent in state.state_vals["ents"]:
+        if ent["image_type"].val in [ENTITY_TYPES["key"], ENTITY_TYPES["lock"], ENTITY_TYPES["gem"]]:
+            key = (ent["image_type"].val, ent["image_theme"].val)
+            original_positions[key] = (ent["x"].val, ent["y"].val)
+
+    # Remove all entities (which moves them off-screen)
+    state.remove_all_entities()
+
+
+    player_x = corridor_y
+    player_y = corridor_length // 2
+    state.set_mouse_pos(player_x, player_y)
+
+    # Get entity types and colors
+    entity_one_type, entity_one_color = entity_one
+    entity_two_type, entity_two_color = entity_two
+
+    # Function to restore entity to the corridor
+    def restore_entity_to_corridor(entity_type, entity_color, x_pos, y_pos):
+        key = (ENTITY_TYPES[entity_type], ENTITY_COLORS[entity_color])
+        if key in original_positions:
+            state.set_entity_position(ENTITY_TYPES[entity_type], ENTITY_COLORS[entity_color], y_pos, x_pos)
+
+    # Restore entity one to the start of the corridor
+    restore_entity_to_corridor(entity_one_type, entity_one_color, corridor_start_x , corridor_y)
+
+    # Restore entity two to the end of the corridor
+    restore_entity_to_corridor(entity_two_type, entity_two_color, corridor_end_x , 0)
+
+    # Update the environment with the new state
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        venv.reset()
+
+    return venv
+
 def compare_first_key_collected(model_path, layer_number, channel, modification_value, num_episodes=100, corridor_length=9, max_steps=100):
     model = helpers.load_interpretable_model(model_path)
     blue_key_collected_first = 0
@@ -188,9 +261,6 @@ def compare_first_key_collected(model_path, layer_number, channel, modification_
 def run_entity_steering_experiment_by_channel(model_path, layer_number, modification_value, episode, channel, entity_name, entity_color=None, num_levels=1, start_level=None, episode_timeout=200, save_gif=False):
     entity_type = ENTITY_TYPES.get(entity_name)
     entity_theme = ENTITY_COLORS.get(entity_color) if entity_color else None
-    if entity_type is None:
-        print(f"Invalid entity name: {entity_name}")
-        return None
     
     if start_level == None:
         start_level = random.randint(1, 100000)
@@ -201,7 +271,6 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
         start_level = random.randint(1, 100000)
         venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
         state = heist.state_from_venv(venv, 0)
-    print(state.entity_exists(entity_type, entity_theme))
     unchanged_obs = venv.reset()
 
     # Save the current position of the target entity
@@ -250,6 +319,7 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
     # Count initial number of target entities
     initial_state = heist.state_from_venv(venv, 0)
     initial_entity_count = initial_state.count_entities(entity_type, entity_theme)
+    current_entity_count = state.count_entities(entity_type, entity_theme)
     
     while not done:
         if save_gif:
@@ -264,7 +334,7 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
         total_reward += reward
         observations.append(converted_obs)
         steps_until_pickup += 1
-        if steps_until_pickup > 300:
+        if steps_until_pickup > 120:
             done = True
         
         state = heist.state_from_venv(venv, 0)
@@ -274,21 +344,19 @@ def run_entity_steering_experiment_by_channel(model_path, layer_number, modifica
             entity_picked_up = True
             done = True
             count_pickups += 1
-            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
+
         elif entity_type == ENTITY_TYPES['gem'] and reward > 0:
             entity_picked_up = True
             done = True
             count_pickups += 1
-            print(f"{entity_name.capitalize()} picked up after {steps_until_pickup} steps")
+
 
     if save_gif:
-        imageio.mimsave(f'gifs/episode_steering_{episode}_{entity_color}_{entity_name}_layer_{layer_number}.gif', frames, fps=30)
-        print("Saved gif!")
+        file_name = f'gifs/episode_steering_{episode}_{entity_color}_{entity_name}_layer_{layer_number}_channel_{channel}_value_{modification_value}.gif'
+        imageio.mimsave(file_name, frames, fps=30)
+        print(f"Saved gif ad {file_name}")
 
-    if not entity_picked_up:
-        print(f"{entity_name.capitalize()} was not picked up during the episode")
-    else:
-        print(f"{entity_name.capitalize()} picked up during the episode")
+
 
     state = heist.state_from_venv(venv, 0)
     state_vals = state.state_vals
@@ -310,7 +378,6 @@ def run_entity_steering_experiment(model_path, layer_number, modification_value,
         start_level = random.randint(1, 100000)
         venv = heist.create_venv(num=1, num_levels=num_levels, start_level=start_level)
         state = heist.state_from_venv(venv, 0)
-    print(state.entity_exists(entity_type, entity_theme))
     unchanged_obs = venv.reset()
 
     # Save the current position of the target entity
