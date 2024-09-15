@@ -1,5 +1,4 @@
 # %%
-
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,8 +10,11 @@ import random
 import math
 from dataclasses import dataclass
 import einops
-
+import wandb
+import os
 import sys
+import glob
+
 sys.path.append('../')  # Adjust the path if necessary to import your modules
 
 import notebooks.heist as heist  # Import your heist environment module
@@ -171,7 +173,18 @@ def generate_batch_activations_parallel(model, model_activations, layer_number, 
 
     return activations_tensor
 
-# Training function for SAE
+# Helper function to find the latest checkpoint
+def find_latest_checkpoint(checkpoint_dir):
+    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, 'sae_checkpoint_step_*.pt'))
+    if not checkpoint_files:
+        return None, None
+    # Extract step numbers and find the maximum
+    steps = [int(os.path.splitext(os.path.basename(f))[0].split('_')[-1]) for f in checkpoint_files]
+    latest_step = max(steps)
+    latest_checkpoint = os.path.join(checkpoint_dir, f'sae_checkpoint_step_{latest_step}.pt')
+    return latest_checkpoint, latest_step
+
+# Training function for SAE with checkpointing and wandb logging
 def train_sae(
     sae,
     model,
@@ -183,9 +196,46 @@ def train_sae(
     num_envs=4,
     episode_length=150,
     log_freq=10,
+    checkpoint_dir='checkpoints',
+    wandb_project="SAE_training",
 ):
-    optimizer = optim.Adam(sae.parameters(), lr=lr)
-    progress_bar = tqdm(range(steps))
+    # Create checkpoint directory if it doesn't exist
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Check for existing checkpoints
+    latest_checkpoint, latest_step = find_latest_checkpoint(checkpoint_dir)
+    if latest_checkpoint:
+        print(f"Resuming from checkpoint: {latest_checkpoint}")
+        checkpoint = t.load(latest_checkpoint, map_location=device)
+        sae.load_state_dict(checkpoint['model_state_dict'])
+        optimizer = optim.Adam(sae.parameters(), lr=lr)
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_step = checkpoint['step'] + 1
+        # Initialize wandb with resume
+        wandb.init(project=wandb_project, resume="allow", config={
+            "batch_size": batch_size,
+            "steps": steps,
+            "lr": lr,
+            "num_envs": num_envs,
+            "episode_length": episode_length,
+            "layer_number": layer_number,
+            "resume_step": latest_step
+        })
+    else:
+        # Initialize optimizer
+        optimizer = optim.Adam(sae.parameters(), lr=lr)
+        # Initialize wandb
+        wandb.init(project=wandb_project, config={
+            "batch_size": batch_size,
+            "steps": steps,
+            "lr": lr,
+            "num_envs": num_envs,
+            "episode_length": episode_length,
+            "layer_number": layer_number,
+        })
+        start_step = 0
+
+    progress_bar = tqdm(range(start_step, steps))
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
@@ -222,6 +272,26 @@ def train_sae(
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
 
+            # Log to wandb
+            wandb.log({
+                "step": step,
+                "loss": loss.item(),
+                "reconstruction_loss": L_reconstruction.item(),
+                "sparsity_loss": L_sparsity.item(),
+            })
+
+        # Save checkpoint every 100 steps
+        if (step + 1) % 100 == 0 or step == steps - 1:
+            checkpoint_path = os.path.join(checkpoint_dir, f'sae_checkpoint_step_{step+1}.pt')
+            t.save({
+                'step': step,
+                'model_state_dict': sae.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss.item(),
+            }, checkpoint_path)
+            wandb.save(checkpoint_path)  # Save checkpoint to wandb
+
+    wandb.finish()
     return loss_history, L_reconstruction_history, L_sparsity_history
 
 # Example usage:
@@ -276,7 +346,7 @@ loss_history, L_reconstruction_history, L_sparsity_history = train_sae(
     model_activations=model_activations,
     layer_number=layer_number,
     batch_size=24,   # Adjust based on your hardware
-    steps=1000,        # Number of training steps
+    steps=1000,        # Total number of training steps
     lr=1e-3,
     num_envs=4,        # Number of parallel environments
     episode_length=150,
