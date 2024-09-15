@@ -87,7 +87,7 @@ class ModelActivations:
 class SAEConfig:
     d_in: int = None  # Input dimension, to be set based on layer activations
     d_hidden: int = 128  # Hidden layer dimension
-    l1_coeff: float = 0.1
+    l1_coeff: float = 0.
     weight_normalize_eps: float = 1e-8
     tied_weights: bool = False
 
@@ -247,15 +247,8 @@ def train_sae(
             batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
         )
 
-        # Create DataLoader for efficient data loading
-        dataset = TensorDataset(activations)
-        data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-        data_iter = iter(data_loader)
-
-        try:
-            batch = next(data_iter)[0].to(device)
-        except StopIteration:
-            continue  # Should not happen as we have one batch
+        # Move activations directly to the device
+        batch = activations.to(device)
 
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts = sae(batch)
@@ -332,7 +325,7 @@ d_in = sample_activations.shape[-1]  # Input dimension for SAE
 sae_cfg = SAEConfig(
     d_in=d_in,
     d_hidden=64,    # Adjust based on your requirements
-    l1_coeff=0.1,   # Adjust regularization coefficient as needed
+    l1_coeff=0.2,   # Adjust regularization coefficient as needed
     tied_weights=False
 )
 
