@@ -15,6 +15,7 @@ import os
 import sys
 import glob
 
+# Append parent directory to import modules
 sys.path.append('../')  # Adjust the path if necessary to import your modules
 
 import notebooks.heist as heist  # Import your heist environment module
@@ -40,6 +41,25 @@ ordered_layer_names = {
     13: 'value_fc',
     14: 'dropout_conv',
     15: 'dropout_fc'
+}
+
+# Define layer types
+layer_types = {
+    'conv1a': 'conv',
+    'pool1': 'pool',
+    'conv2a': 'conv',
+    'conv2b': 'conv',
+    'pool2': 'pool',
+    'conv3a': 'conv',
+    'pool3': 'pool',
+    'conv4a': 'conv',
+    'pool4': 'pool',
+    'fc1': 'fc',
+    'fc2': 'fc',
+    'fc3': 'fc',
+    'value_fc': 'fc',
+    'dropout_conv': 'dropout_conv',
+    'dropout_fc': 'dropout_fc'
 }
 
 # ModelActivations class modified for batch processing
@@ -87,7 +107,7 @@ class ModelActivations:
 class SAEConfig:
     d_in: int = None  # Input dimension, to be set based on layer activations
     d_hidden: int = 128  # Hidden layer dimension
-    l1_coeff: float = 0.
+    l1_coeff: float = 0.1
     weight_normalize_eps: float = 1e-8
     tied_weights: bool = False
 
@@ -184,6 +204,26 @@ def find_latest_checkpoint(checkpoint_dir):
     latest_checkpoint = os.path.join(checkpoint_dir, f'sae_checkpoint_step_{latest_step}.pt')
     return latest_checkpoint, latest_step
 
+# Function to assign hyperparameters based on layer type
+def get_layer_hyperparameters(layer_name, layer_types):
+    layer_type = layer_types.get(layer_name, 'other')
+    if layer_type == 'conv':
+        return {
+            'd_hidden': 124,     # Example value for conv layers
+            'l1_coeff': 0.05     # Example value for conv layers
+        }
+    elif layer_type == 'fc':
+        return {
+            'd_hidden': 1024,    # Example value for fully connected layers
+            'l1_coeff': 0.1      # Example value for fully connected layers
+        }
+    else:
+        # Default hyperparameters for other layer types (e.g., pooling, dropout)
+        return {
+            'd_hidden': 256,     # Example default value
+            'l1_coeff': 0.05     # Example default value
+        }
+
 # Training function for SAE with checkpointing and wandb logging
 def train_sae(
     sae,
@@ -191,7 +231,7 @@ def train_sae(
     model_activations,
     layer_number,
     batch_size=16,
-    steps=1000,
+    steps=100,  # Reduced steps to 100 (1/10th of 1000)
     lr=1e-3,
     num_envs=4,
     episode_length=150,
@@ -199,11 +239,15 @@ def train_sae(
     checkpoint_dir='checkpoints',
     wandb_project="SAE_training",
 ):
-    # Create checkpoint directory if it doesn't exist
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    # Unique identifier for each layer to manage separate checkpoints and wandb runs
+    layer_identifier = f'layer_{layer_number}_{ordered_layer_names[layer_number]}'
+
+    # Define a separate directory for each layer's checkpoints
+    layer_checkpoint_dir = os.path.join(checkpoint_dir, layer_identifier)
+    os.makedirs(layer_checkpoint_dir, exist_ok=True)
 
     # Check for existing checkpoints
-    latest_checkpoint, latest_step = find_latest_checkpoint(checkpoint_dir)
+    latest_checkpoint, latest_step = find_latest_checkpoint(layer_checkpoint_dir)
     if latest_checkpoint:
         print(f"Resuming from checkpoint: {latest_checkpoint}")
         checkpoint = t.load(latest_checkpoint, map_location=device)
@@ -219,8 +263,9 @@ def train_sae(
             "num_envs": num_envs,
             "episode_length": episode_length,
             "layer_number": layer_number,
-            "resume_step": latest_step
-        })
+            "resume_step": latest_step,
+            "layer_identifier": layer_identifier
+        }, name=f"SAE_{layer_identifier}")
     else:
         # Initialize optimizer
         optimizer = optim.Adam(sae.parameters(), lr=lr)
@@ -232,23 +277,27 @@ def train_sae(
             "num_envs": num_envs,
             "episode_length": episode_length,
             "layer_number": layer_number,
-        })
+            "layer_identifier": layer_identifier
+        }, name=f"SAE_{layer_identifier}")
         start_step = 0
 
-    progress_bar = tqdm(range(start_step, steps))
+    progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
 
     for step in progress_bar:
-        # Generate batch activations
-        activations = generate_batch_activations_parallel(
-            model, model_activations, layer_number,
-            batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
-        )
-
-        # Move activations directly to the device
-        batch = activations.to(device)
+        try:
+            # Generate batch activations
+            activations = generate_batch_activations_parallel(
+                model, model_activations, layer_number,
+                batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
+            )
+            # Move activations directly to the device
+            batch = activations.to(device)
+        except Exception as e:
+            print(f"Error during activation generation: {e}")
+            continue  # Skip this iteration and proceed
 
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts = sae(batch)
@@ -275,7 +324,7 @@ def train_sae(
 
         # Save checkpoint every 100 steps
         if (step + 1) % 100 == 0 or step == steps - 1:
-            checkpoint_path = os.path.join(checkpoint_dir, f'sae_checkpoint_step_{step+1}.pt')
+            checkpoint_path = os.path.join(layer_checkpoint_dir, f'sae_checkpoint_step_{step+1}.pt')
             t.save({
                 'step': step,
                 'model_state_dict': sae.state_dict(),
@@ -306,61 +355,100 @@ model = load_interpretable_model()
 model.to(device)
 model.eval()  # Set model to evaluation mode
 
-# Choose the layer number you're interested in
-layer_number = 8  # For example
-
-# Define layer paths for activation capture
-layer_paths = [ordered_layer_names[layer_number]]  # Capture only the target layer
-
-# Initialize ModelActivations
-model_activations = ModelActivations(model, layer_paths=layer_paths)
-
-# Generate a sample activation to determine input dimension
-sample_activations = generate_batch_activations_parallel(
-    model, model_activations, layer_number, batch_size=1
-)
-d_in = sample_activations.shape[-1]  # Input dimension for SAE
-
-# Configure SAE
-sae_cfg = SAEConfig(
-    d_in=d_in,
-    d_hidden=64,    # Adjust based on your requirements
-    l1_coeff=0.2,   # Adjust regularization coefficient as needed
-    tied_weights=False
-)
-
-# Initialize SAE
-sae = SAE(sae_cfg)
-
-# Train SAE
-loss_history, L_reconstruction_history, L_sparsity_history = train_sae(
-    sae=sae,
-    model=model,
-    model_activations=model_activations,
-    layer_number=layer_number,
-    batch_size=24,   # Adjust based on your hardware
-    steps=1000,        # Total number of training steps
+# Function to train SAEs for all layers
+def train_all_layers(
+    model,
+    ordered_layer_names,
+    layer_types,  # Pass the layer_types dictionary
+    checkpoint_dir='checkpoints',
+    wandb_project="SAE_training",
+    steps_per_layer=100,  # Reduced steps to 100
+    batch_size=24,        # Adjust based on your hardware
     lr=1e-3,
-    num_envs=4,        # Number of parallel environments
+    num_envs=4,           # Number of parallel environments
+    episode_length=150,
+    log_freq=10,
+):
+    for layer_number, layer_name in ordered_layer_names.items():
+        print(f"\n=== Training SAE for Layer {layer_number}: {layer_name} ===")
+        
+        # Get hyperparameters based on layer type
+        hyperparams = get_layer_hyperparameters(layer_name, layer_types)
+        d_hidden = hyperparams['d_hidden']
+        l1_coeff = hyperparams['l1_coeff']
+
+        # Define layer paths for activation capture
+        layer_paths = [layer_name]  # Capture only the target layer
+
+        # Initialize ModelActivations
+        model_activations = ModelActivations(model, layer_paths=layer_paths)
+
+        # Generate a sample activation to determine input dimension
+        sample_activations = generate_batch_activations_parallel(
+            model, model_activations, layer_number, batch_size=1
+        )
+        d_in = sample_activations.shape[-1]  # Input dimension for SAE
+
+        # Configure SAE
+        sae_cfg = SAEConfig(
+            d_in=d_in,
+            d_hidden=d_hidden,    # Assigned based on layer type
+            l1_coeff=l1_coeff,    # Assigned based on layer type
+            tied_weights=False     # Adjust if needed
+        )
+
+        # Initialize SAE
+        sae = SAE(sae_cfg)
+
+        # Train SAE
+        loss_history, L_reconstruction_history, L_sparsity_history = train_sae(
+            sae=sae,
+            model=model,
+            model_activations=model_activations,
+            layer_number=layer_number,
+            batch_size=batch_size,   # Adjust based on your hardware
+            steps=steps_per_layer,   # Reduced number of steps
+            lr=lr,
+            num_envs=num_envs,        # Number of parallel environments
+            episode_length=episode_length,
+            log_freq=log_freq,
+            checkpoint_dir=checkpoint_dir,
+            wandb_project=wandb_project,
+        )
+
+        # Optional: Plot training losses for the current layer
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(12, 4))
+        plt.subplot(1, 3, 1)
+        plt.plot(loss_history)
+        plt.title(f'Layer {layer_number} Total Loss')
+
+        plt.subplot(1, 3, 2)
+        plt.plot(L_reconstruction_history)
+        plt.title(f'Layer {layer_number} Reconstruction Loss')
+
+        plt.subplot(1, 3, 3)
+        plt.plot(L_sparsity_history)
+        plt.title(f'Layer {layer_number} Sparsity Loss')
+
+        plt.tight_layout()
+        plt.show()
+
+        # Clear hooks to prevent accumulation
+        model_activations.clear_hooks()
+
+# Execute training for all layers
+train_all_layers(
+    model=model,
+    ordered_layer_names=ordered_layer_names,
+    layer_types=layer_types,
+    checkpoint_dir='checkpoints',
+    wandb_project="SAE_training",
+    steps_per_layer=100,  # Reduced steps
+    batch_size=24,        # Adjust based on your hardware
+    lr=1e-3,
+    num_envs=4,           # Number of parallel environments
     episode_length=150,
     log_freq=10,
 )
-
-# Plot training losses (optional)
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(12, 4))
-plt.subplot(1, 3, 1)
-plt.plot(loss_history)
-plt.title('Total Loss')
-
-plt.subplot(1, 3, 2)
-plt.plot(L_reconstruction_history)
-plt.title('Reconstruction Loss')
-
-plt.subplot(1, 3, 3)
-plt.plot(L_sparsity_history)
-plt.title('Sparsity Loss')
-
-plt.tight_layout()
-plt.show()
