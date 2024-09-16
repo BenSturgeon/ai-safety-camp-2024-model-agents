@@ -1107,3 +1107,44 @@ def create_objective_vectors(model_activations, layer_paths, num_samples = 16) -
     return objective_vectors
 
 
+@t.no_grad()
+def batch_generate_action_with_cache(model, observations, model_activations, layer_paths, is_procgen_env=False):
+    """
+    Generates actions and captures activations for a batch of observations.
+
+    Args:
+        model (nn.Module): The policy model.
+        observations (list or np.ndarray): List or array of observations.
+        model_activations (ModelActivations): Instance of ModelActivations.
+        layer_paths (list of str): Layers from which to capture activations.
+        is_procgen_env (bool): Flag indicating if using Procgen environments.
+
+    Returns:
+        actions (np.ndarray): Array of actions.
+        activations (dict): Dictionary of captured activations.
+    """
+    # Convert observations to tensor and preprocess
+    if isinstance(observations, list):
+        observations = np.stack(observations)
+    observations = observation_to_rgb(observations)  # Ensure correct preprocessing
+    observations = t.tensor(observations, dtype=t.float32)
+
+    # Run the model and capture activations
+    outputs, activations = model_activations.run_with_cache(observations, layer_paths)
+
+    # Extract logits (assuming model outputs a tuple where the first element has 'logits')
+    if isinstance(outputs, tuple):
+        logits = outputs[0].logits
+    else:
+        logits = outputs.logits
+
+    # Compute action probabilities
+    probabilities = t.softmax(logits, dim=-1)
+
+    # Sample actions
+    actions = t.multinomial(probabilities, num_samples=1).squeeze(1).cpu().numpy()
+
+    if is_procgen_env:
+        actions = actions.reshape(-1, 1)
+
+    return actions, activations
