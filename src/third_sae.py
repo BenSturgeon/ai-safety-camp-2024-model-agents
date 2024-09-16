@@ -210,18 +210,18 @@ def get_layer_hyperparameters(layer_name, layer_types):
     if layer_type == 'conv':
         return {
             'd_hidden': 124,     # Example value for conv layers
-            'l1_coeff': 0.05     # Example value for conv layers
+            'l1_coeff': 0.0001     # Example value for conv layers
         }
     elif layer_type == 'fc':
         return {
             'd_hidden': 1024,    # Example value for fully connected layers
-            'l1_coeff': 0.1      # Example value for fully connected layers
+            'l1_coeff': 0.01      # Example value for fully connected layers
         }
     else:
         # Default hyperparameters for other layer types (e.g., pooling, dropout)
         return {
             'd_hidden': 256,     # Example default value
-            'l1_coeff': 0.05     # Example default value
+            'l1_coeff': 0.005     # Example default value
         }
 
 # Training function for SAE with checkpointing and wandb logging
@@ -231,7 +231,7 @@ def train_sae(
     model_activations,
     layer_number,
     batch_size=16,
-    steps=100,  # Reduced steps to 100 (1/10th of 1000)
+    steps=200,  # Reduced steps to 100 (1/10th of 1000)
     lr=1e-3,
     num_envs=4,
     episode_length=150,
@@ -452,3 +452,5 @@ train_all_layers(
     episode_length=150,
     log_freq=10,
 )
+
+# %%
