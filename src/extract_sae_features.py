@@ -1,4 +1,5 @@
 # %%
+
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +17,7 @@ import sys
 import glob
 import matplotlib.pyplot as plt
 import sae
-
+import notebooks.helpers as helpers
 # Append parent directory to import modules
 sys.path.append('../')  # Adjust the path if necessary to import your modules
 
@@ -161,7 +162,7 @@ def load_interpretable_model(model_path="../model_interpretable.pt"):
     return model
 
 # Function to load the trained SAE model and get activation shape
-def load_sae_model(layer_number, sae_model_path='checkpoints/layer_8_conv4a/sae_checkpoint_step_100.pt'):
+def load_sae_model(layer_number, sae_model_path):
     # Load the main model
     model = load_interpretable_model()
     model.to(device)
@@ -187,21 +188,24 @@ def load_sae_model(layer_number, sae_model_path='checkpoints/layer_8_conv4a/sae_
     _, channels, height, width = activation_shape
     d_in = channels * height * width
 
-    # SAE configuration (must match the one used during training)
-    # sae_cfg = SAEConfig(
-    #     d_in=d_in,
-    #     d_hidden=128,    # Adjust based on your training configuration
-    #     l1_coeff=0.1,    # Adjust based on your training configuration
-    #     tied_weights=False  # Adjust based on your training configuration
-    # )
-
+    # Load the checkpoint
     checkpoint = t.load(sae_model_path, map_location=device)
+    state_dict = checkpoint['model_state_dict']
 
+    # Infer d_in and d_hidden from the shapes of W_enc
+    W_enc_shape = state_dict['W_enc'].shape  # Should be [d_in, d_hidden]
+    inferred_d_in, inferred_d_hidden = W_enc_shape
 
+    # Optionally, verify that inferred_d_in matches d_in
+    if inferred_d_in != d_in:
+        print(f"Warning: Inferred d_in ({inferred_d_in}) does not match computed d_in ({d_in})")
+        d_in = inferred_d_in  # Use inferred d_in
+
+    # Create SAEConfig using inferred dimensions
     sae_cfg = SAEConfig(
-        d_in=2048,          # Input dimension as per checkpoint
-        d_hidden=124,       # Hidden dimension as per checkpoint
-        l1_coeff=0.05,
+        d_in=inferred_d_in,
+        d_hidden=inferred_d_hidden,
+        l1_coeff=0.05,      # You may retrieve l1_coeff and tied_weights from elsewhere if needed
         tied_weights=False
     )
 
@@ -209,10 +213,9 @@ def load_sae_model(layer_number, sae_model_path='checkpoints/layer_8_conv4a/sae_
     sae = SAE(sae_cfg)
 
     # Load state dict
-    sae.load_state_dict(checkpoint['model_state_dict'])
+    sae.load_state_dict(state_dict)
     sae.to(device)
     sae.eval()  # Set to evaluation mode
-
 
     print("Returning values:")
     print("sae:", sae)
@@ -222,6 +225,7 @@ def load_sae_model(layer_number, sae_model_path='checkpoints/layer_8_conv4a/sae_
     print("layer_name:", layer_name)
 
     return sae, activation_shape, model_activations, model, layer_name
+
 
 # %%
 # Function to collect strongly activating features and corresponding observations
@@ -295,10 +299,30 @@ def collect_strong_activations(sae, model, layer_number, threshold=1.0, num_epis
 
 # Specify the layer number and path to the trained SAE model
 layer_number = 8  # For example, 'conv4a'
-sae_model_path = '../checkpoints/checkpoints_batch2/layer_8_conv4a/sae_checkpoint_step_100.pt'  # Path to your saved SAE model
+sae_model_path = '../checkpoints/checkpoints_batch2/layer_6_conv3a/sae_checkpoint_step_100.pt'  # Path to your saved SAE model
+
+
+checkpoint = t.load(sae_model_path, map_location=device)
+
+
+# sae_cfg = SAEConfig(
+#     d_in=2048,          # Input dimension as per checkpoint
+#     d_hidden=124,       # Hidden dimension as per checkpoint
+#     l1_coeff=0.05,
+#     tied_weights=False
+# )
+
+# Initialize SAE
+# sae = SAE(sae_cfg)
+
+# Load state dict
+sae.load_state_dict(checkpoint['model_state_dict'])
+sae.to(device)
+sae.eval()  # Set to evaluation mode
+# %%
 
 # Load the main model
-model = sae.load_interpretable_model()
+model = helpers.load_interpretable_model()
 model.to(device)
 model.eval()
 
@@ -323,25 +347,10 @@ _, channels, height, width = activation_shape
 d_in = channels * height * width
 
 
-checkpoint = t.load(sae_model_path, map_location=device)
+
+
 
 # %%
-
-sae_cfg = SAEConfig(
-    d_in=2048,          # Input dimension as per checkpoint
-    d_hidden=124,       # Hidden dimension as per checkpoint
-    l1_coeff=0.05,
-    tied_weights=False
-)
-
-# Initialize SAE
-sae = SAE(sae_cfg)
-
-# Load state dict
-sae.load_state_dict(checkpoint['model_state_dict'])
-sae.to(device)
-sae.eval()  # Set to evaluation mode
-
 # Collect and visualize strongly activating features
 feature_activations = collect_strong_activations(
     sae,
@@ -432,12 +441,13 @@ def replace_layer_with_sae(model, sae, layer_number):
 
     # Define the hook function
     def hook_fn(module, input, output):
-        # Flatten output
-        h = output.view(output.size(0), -1).to(device)
+        # Flatten output using reshape
+        # h = layer_activation.view(1, -1).to(device)
+        h = output.reshape(output.size(0), -1).to(device)
         # Pass through SAE
         _, _, _, acts, h_reconstructed = sae(h)
-        # Reshape h_reconstructed back to original shape
-        h_reconstructed = h_reconstructed.view_as(output)
+        # Reshape h_reconstructed back to original shape using reshape_as
+        h_reconstructed = h_reconstructed.reshape_as(output)
         return h_reconstructed
 
     # Register the forward hook
@@ -486,9 +496,12 @@ def measure_logit_difference(model, sae, layer_number, num_samples=100):
     # Return the differences
     return logits_without_sae, logits_with_sae, logit_differences
 
-# Assuming you have trained the SAE for the desired layer
-layer_number = 8  # Replace with your target layer number
+# %%
 
+# # Assuming you have trained the SAE for the desired layer
+layer_number = 6  # Replace with your target layer number
+sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
+# %%
 # Measure logit differences
 logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
     model, sae, layer_number, num_samples=100
@@ -510,7 +523,6 @@ plt.show()
 
 # %%
 # Load the trained SAE and model
-sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
 
 # Measure the logit differences
 logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
@@ -530,3 +542,66 @@ plt.title(f'Histogram of Logit Differences (Layer {layer_number})')
 plt.xlabel('Logit Difference')
 plt.ylabel('Frequency')
 plt.show()
+
+
+# %%
+def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
+    # Function to run episodes and collect total rewards
+    def run_episodes(model, num_episodes, save_gif=False):
+        env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+        total_rewards = []
+        for episode in range(num_episodes):
+            obs = env.reset()
+            done = False
+            total_reward = 0
+            frames = []
+            steps = 0
+            print(f"Episode {episode + 1}/{num_episodes}")
+            while not done and steps < 100:
+                obs = helpers.observation_to_rgb(obs)
+                obs_tensor = t.tensor(np.array(obs), dtype=t.float32)
+                obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h w c").to(device)
+                with t.no_grad():
+                    outputs = model(obs_tensor)
+                    logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+                    action = t.argmax(logits, dim=-1).cpu().numpy()
+                obs, reward, done, info = env.step(action)
+                total_reward += reward[0]
+                steps +=1
+                if save_gif:
+                    frame = env.render(mode='rgb_array')
+                    frames.append(frame)
+            total_rewards.append(total_reward)
+            
+            if save_gif:
+                import imageio
+                imageio.mimsave(f'episode_{episode}_{save_gif}.gif', frames, fps=30)
+        
+        env.close()
+        return total_rewards
+
+    # Run episodes without SAE
+    model.eval()
+    rewards_without_sae = run_episodes(model, num_episodes, save_gif=False)
+
+    # Register the hook
+    handle = replace_layer_with_sae(model, sae, layer_number)
+
+    # Run episodes with SAE
+    model.eval()
+    rewards_with_sae = run_episodes(model, num_episodes, save_gif=False)
+
+    # Remove the hook
+    handle.remove()
+
+    # Compare results
+    avg_reward_without_sae = np.mean(rewards_without_sae)
+    avg_reward_with_sae = np.mean(rewards_with_sae)
+
+    print(f"Average reward without SAE: {avg_reward_without_sae}")
+    print(f"Average reward with SAE: {avg_reward_with_sae}")
+
+    return rewards_without_sae, rewards_with_sae
+
+model = load_interpretable_model().to(device)
+evaluate_model_performance(model, sae, 6 , 10)

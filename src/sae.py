@@ -285,6 +285,7 @@ def train_sae(
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
+    variance_explained_history = []
 
     for step in progress_bar:
         try:
@@ -323,6 +324,7 @@ def train_sae(
             loss_history.append(loss.item())
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
+            variance_explained_history.append(variance_explained)
 
             # Log to wandb
             wandb.log({
@@ -348,7 +350,7 @@ def train_sae(
             wandb.save(checkpoint_path)  # Save checkpoint to wandb
 
     wandb.finish()
-    return loss_history, L_reconstruction_history, L_sparsity_history
+    return loss_history, L_reconstruction_history, L_sparsity_history, variance_explained_history
 
 # Example usage:
 
