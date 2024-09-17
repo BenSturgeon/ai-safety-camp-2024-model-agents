@@ -136,9 +136,8 @@ class SAE(nn.Module):
         # Encoder
         acts = F.leaky_relu(t.matmul(h, self.W_enc) + self.b_enc)
 
-
         # Decoder
-        h_reconstructed = t.matmul(acts, self.W_dec) + self.b_dec  # [batch_size, d_in]
+        h_reconstructed = t.tanh(t.matmul(acts, self.W_dec) + self.b_dec)  # [batch_size, d_in]
 
         # Loss components
         L_reconstruction = F.mse_loss(h_reconstructed, h, reduction='mean')
@@ -210,18 +209,18 @@ def get_layer_hyperparameters(layer_name, layer_types):
     if layer_type == 'conv':
         return {
             'd_hidden': 124,     # Example value for conv layers
-            'l1_coeff': 0.5     # Example value for conv layers
+            'l1_coeff': 0.01     # Example value for conv layers
         }
     elif layer_type == 'fc':
         return {
             'd_hidden': 1024,    # Example value for fully connected layers
-            'l1_coeff': 0.1      # Example value for fully connected layers
+            'l1_coeff': 0.01      # Example value for fully connected layers
         }
     else:
         # Default hyperparameters for other layer types (e.g., pooling, dropout)
         return {
             'd_hidden': 256,     # Example default value
-            'l1_coeff': 0.2     # Example default value
+            'l1_coeff': 0.01    # Example default value
         }
 
 # Training function for SAE with checkpointing and wandb logging
@@ -295,13 +294,18 @@ def train_sae(
                 batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
             )
             # Move activations directly to the device
+            # Before feeding into the SAE
+
             batch = activations.to(device)
+            batch_mean = batch.mean(dim=0, keepdim=True)
+            batch_std = batch.std(dim=0, keepdim=True) + 1e-8
+            batch_normalized = (batch - batch_mean) / batch_std
         except Exception as e:
             print(f"Error during activation generation: {e}")
             continue  # Skip this iteration and proceed
 
         optimizer.zero_grad()
-        loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(batch)
+        loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(batch_normalized)
         nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
         loss.backward()
         optimizer.step()
