@@ -33,16 +33,23 @@ from procgen_tools.procgen_wrappers import VecExtractDictObs, TransposeFrame, Sc
 from gym3 import ToBaselinesVecEnv
 
 
-
-# Constants
-KEY_COLORS = {0: 'blue',1: 'green',2: 'red',}
-MOUSE = 0
-KEY = 2
-LOCKED_DOOR = 1
-WORLD_DIM = 25
-EMPTY = 100
-BLOCKED = 51
-GEM= 9
+ordered_layer_names  = {
+    1: 'conv1a',
+    2: 'pool1',
+    3: 'conv2a',
+    4: 'conv2b',
+    5: 'pool2',
+    6: 'conv3a',
+    7: 'pool3',
+    8: 'conv4a',
+    9: 'pool4',
+    10: 'fc1',
+    11: 'fc2',
+    12: 'fc3',
+    13: 'value_fc',
+    14: 'dropout_conv',
+    15: 'dropout_fc'
+}
 
 
 ENTITY_COLORS = {
@@ -57,6 +64,17 @@ ENTITY_TYPES = {
     "gem": 9,
     "player": 0
 }
+
+
+# Constants
+KEY_COLORS = {0: 'blue',1: 'green',2: 'red',}
+MOUSE = 0
+KEY = 2
+LOCKED_DOOR = 1
+WORLD_DIM = 25
+EMPTY = 100
+BLOCKED = 51
+GEM= 9
 
 
 HEIST_STATE_DICT_TEMPLATE = [
