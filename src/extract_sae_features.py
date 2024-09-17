@@ -1,0 +1,415 @@
+# %%
+import torch as t
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
+import numpy as np
+import random
+import math
+from dataclasses import dataclass
+import einops
+import wandb
+import os
+import sys
+import glob
+import matplotlib.pyplot as plt
+import sae
+
+# Append parent directory to import modules
+sys.path.append('../')  # Adjust the path if necessary to import your modules
+
+import notebooks.heist as heist  # Import your heist environment module
+
+# Set device
+device = t.device("cuda" if t.cuda.is_available() else "cpu")
+
+# Ordered layer names
+ordered_layer_names = {
+    1: 'conv1a',
+    2: 'pool1',
+    3: 'conv2a',
+    4: 'conv2b',
+    5: 'pool2',
+    6: 'conv3a',
+    7: 'pool3',
+    8: 'conv4a',
+    9: 'pool4',
+    10: 'fc1',
+    11: 'fc2',
+    12: 'fc3',
+    13: 'value_fc',
+    14: 'dropout_conv',
+    15: 'dropout_fc'
+}
+
+# Define layer types
+layer_types = {
+    'conv1a': 'conv',
+    'pool1': 'pool',
+    'conv2a': 'conv',
+    'conv2b': 'conv',
+    'pool2': 'pool',
+    'conv3a': 'conv',
+    'pool3': 'pool',
+    'conv4a': 'conv',
+    'pool4': 'pool',
+    'fc1': 'fc',
+    'fc2': 'fc',
+    'fc3': 'fc',
+    'value_fc': 'fc',
+    'dropout_conv': 'dropout_conv',
+    'dropout_fc': 'dropout_fc'
+}
+
+# ModelActivations class modified for batch processing
+class ModelActivations:
+    def __init__(self, model, layer_paths):
+        self.activations = {}
+        self.model = model
+        self.hooks = []
+        self.layer_paths = layer_paths
+        self.register_hooks()
+    
+    def clear_hooks(self):
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+    
+    def get_activation(self, name):
+        def hook(model, input, output):
+            self.activations[name] = output.detach()
+        return hook
+    
+    def register_hooks(self):
+        for path in self.layer_paths:
+            elements = path.split('.')
+            module = self.model
+            for element in elements:
+                if '[' in element and ']' in element:
+                    base, idx = element.split('[')
+                    idx = int(idx[:-1])
+                    module = getattr(module, base)[idx]
+                else:
+                    module = getattr(module, element)
+            hook = module.register_forward_hook(self.get_activation(path.replace('.', '_')))
+            self.hooks.append(hook)
+    
+    def run_with_cache(self, inputs):
+        self.activations = {}
+        inputs = einops.rearrange(inputs, "b h c w -> b w c h ")
+        inputs = inputs.to(next(self.model.parameters()).device)
+        outputs, value = self.model(inputs)
+        return outputs, self.activations
+
+# SAE configuration and class
+@dataclass
+class SAEConfig:
+    d_in: int = None  # Input dimension, to be set based on layer activations
+    d_hidden: int = 128  # Hidden layer dimension
+    l1_coeff: float = 0.1
+    weight_normalize_eps: float = 1e-8
+    tied_weights: bool = False
+
+class SAE(nn.Module):
+    def __init__(self, cfg: SAEConfig):
+        super().__init__()
+        self.cfg = cfg
+
+        # Encoder weights and biases
+        self.W_enc = nn.Parameter(
+            nn.init.kaiming_uniform_(t.empty(self.cfg.d_in, self.cfg.d_hidden))
+        )
+        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden))
+
+        # Decoder weights and biases
+        if self.cfg.tied_weights:
+            self.W_dec = self.W_enc.t()
+        else:
+            self.W_dec = nn.Parameter(
+                nn.init.kaiming_uniform_(t.empty(self.cfg.d_hidden, self.cfg.d_in))
+            )
+        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in))
+
+        self.to(device)
+
+    def forward(self, h):
+        # Encoder
+        acts = F.relu(t.matmul(h, self.W_enc) + self.b_enc)  # [batch_size, d_hidden]
+
+        # Decoder
+        h_reconstructed = t.matmul(acts, self.W_dec) + self.b_dec  # [batch_size, d_in]
+
+        # Loss components
+        L_reconstruction = F.mse_loss(h_reconstructed, h, reduction='mean')
+        L_sparsity = acts.abs().mean()
+        loss = L_reconstruction + self.cfg.l1_coeff * L_sparsity
+
+        return loss, L_reconstruction, L_sparsity, acts
+
+# Function to load the main model (policy network)
+def load_interpretable_model(model_path="../model_interpretable.pt"):
+    import gym
+    from src.interpretable_impala import CustomCNN  # Import your model class
+    env_name = "procgen:procgen-heist-v0"
+    env = gym.make(env_name, start_level=100, num_levels=200, render_mode="rgb_array", distribution_mode="easy")
+    observation_space = env.observation_space
+    action_space = env.action_space.n
+    model = CustomCNN(observation_space, action_space)
+    model.load_from_file(model_path, device=device)
+    return model
+
+# Function to load the trained SAE model and get activation shape
+def load_sae_model(layer_number, sae_model_path='checkpoints/layer_8_conv4a/sae_checkpoint_step_100.pt'):
+    # Load the main model
+    model = load_interpretable_model()
+    model.to(device)
+    model.eval()
+
+    # Define the layer paths
+    layer_name = ordered_layer_names[layer_number]
+    layer_paths = [layer_name]
+
+    # Initialize ModelActivations
+    model_activations = ModelActivations(model, layer_paths=layer_paths)
+
+    # Get a sample observation
+    env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+    obs = env.reset()
+    obs = t.tensor(obs, dtype=t.float32)  # Add batch dimension
+
+    # Run model_activations to get activation shape
+    with t.no_grad():
+        outputs, activations = model_activations.run_with_cache(obs)
+    layer_activation = activations[layer_name.replace('.', '_')]
+    activation_shape = layer_activation.shape  # [batch_size, channels, height, width]
+    _, channels, height, width = activation_shape
+    d_in = channels * height * width
+
+    # SAE configuration (must match the one used during training)
+    # sae_cfg = SAEConfig(
+    #     d_in=d_in,
+    #     d_hidden=128,    # Adjust based on your training configuration
+    #     l1_coeff=0.1,    # Adjust based on your training configuration
+    #     tied_weights=False  # Adjust based on your training configuration
+    # )
+
+    checkpoint = t.load(sae_model_path, map_location=device)
+
+
+    sae_cfg = SAEConfig(
+        d_in=2048,          # Input dimension as per checkpoint
+        d_hidden=124,       # Hidden dimension as per checkpoint
+        l1_coeff=0.05,
+        tied_weights=False
+    )
+
+    # Initialize SAE
+    sae = SAE(sae_cfg)
+
+    # Load state dict
+    sae.load_state_dict(checkpoint['model_state_dict'])
+    sae.to(device)
+    sae.eval()  # Set to evaluation mode
+
+
+    print("Returning values:")
+    print("sae:", sae)
+    print("activation_shape:", activation_shape)
+    print("model_activations:", model_activations)
+    print("model:", model)
+    print("layer_name:", layer_name)
+
+    return sae, activation_shape, model_activations, model, layer_name
+
+# %%
+# Function to collect strongly activating features and corresponding observations
+def collect_strong_activations(sae, model, layer_number, threshold=1.0, num_episodes=10, max_steps_per_episode=1000, feature_indices=None, device=device):
+    # Ensure model and sae are in eval mode
+    model.eval()
+    sae.eval()
+
+    # Initialize ModelActivations for the layer
+    layer_name = ordered_layer_names[layer_number]
+    layer_paths = [layer_name]
+    model_activations = ModelActivations(model, layer_paths=layer_paths)
+
+    # Initialize data structure to store observations
+    from collections import defaultdict
+    feature_observations = defaultdict(list)
+
+    # If feature_indices is None, monitor all features
+    if feature_indices is None:
+        feature_indices = range(sae.cfg.d_hidden)
+
+    # Create the environment
+    env = heist.create_venv(
+        num=1,
+        num_levels=0,
+        start_level=random.randint(1, 100000),
+        distribution_mode="easy"
+    )
+
+    for episode in range(num_episodes):
+        obs = env.reset()
+        done = False
+        steps = 0
+
+        while not done and steps < max_steps_per_episode:
+            obs_tensor = t.tensor(obs, dtype=t.float32)  # Add batch dimension
+
+            # Run the model and get activations
+            with t.no_grad():
+                outputs, activations = model_activations.run_with_cache(obs_tensor)
+                # Get the layer activation
+                layer_activation = activations[layer_name.replace('.', '_')]
+                # Flatten layer activation
+                h = layer_activation.view(1, -1).to(device)
+                # Pass through SAE to get feature activations
+                _, _, _, acts = sae(h)
+                acts = acts.cpu().numpy()[0]  # Get numpy array, remove batch dimension
+
+            # Check for strongly activated features
+            for idx in feature_indices:
+                activation_value = acts[idx]
+                if activation_value >= threshold:
+                    # Record the observation and activation value
+                    feature_observations[idx].append((obs.copy(), activation_value))
+
+            # Get action from the model outputs
+            logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+            probabilities = t.softmax(logits, dim=-1)
+            action = t.multinomial(probabilities, num_samples=1).item()
+
+            # Step the environment
+            obs, reward, done, info = env.step(np.array([action]))
+            steps += 1
+
+    env.close()
+    return feature_observations
+
+# Main script to load SAE, collect features, and visualize them
+# %%
+
+
+# Specify the layer number and path to the trained SAE model
+layer_number = 8  # For example, 'conv4a'
+sae_model_path = '../checkpoints/checkpoints_batch2/layer_8_conv4a/sae_checkpoint_step_100.pt'  # Path to your saved SAE model
+
+# Load the main model
+model = sae.load_interpretable_model()
+model.to(device)
+model.eval()
+
+# Define the layer paths
+layer_name = ordered_layer_names[layer_number]
+layer_paths = [layer_name]
+
+# Initialize ModelActivations
+model_activations = ModelActivations(model, layer_paths=layer_paths)
+
+# Get a sample observation
+env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+obs = env.reset()
+obs = t.tensor(obs, dtype=t.float32)  # Add batch dimension
+
+# Run model_activations to get activation shape
+with t.no_grad():
+    outputs, activations = model_activations.run_with_cache(obs)
+layer_activation = activations[layer_name.replace('.', '_')]
+activation_shape = layer_activation.shape  # [batch_size, channels, height, width]
+_, channels, height, width = activation_shape
+d_in = channels * height * width
+
+
+checkpoint = t.load(sae_model_path, map_location=device)
+
+# %%
+
+sae_cfg = SAEConfig(
+    d_in=2048,          # Input dimension as per checkpoint
+    d_hidden=124,       # Hidden dimension as per checkpoint
+    l1_coeff=0.05,
+    tied_weights=False
+)
+
+# Initialize SAE
+sae = SAE(sae_cfg)
+
+# Load state dict
+sae.load_state_dict(checkpoint['model_state_dict'])
+sae.to(device)
+sae.eval()  # Set to evaluation mode
+
+# Collect and visualize strongly activating features
+feature_activations = collect_strong_activations(
+    sae,
+    model=model,
+    layer_number=layer_number,
+    threshold=0.5,          # Adjust threshold as needed
+    num_episodes=50,        # Number of episodes to run
+    max_steps_per_episode=100,
+    feature_indices=None,    # Monitor all features
+    device=device
+)
+# %%
+# Shuffle the features
+shuffled_features = list(feature_activations.items())
+random.shuffle(shuffled_features)
+feature_activations = dict(shuffled_features)
+
+print(f"Features have been shuffled. New order: {list(feature_activations.keys())}")
+
+save_obs = None
+# For each feature, visualize some of the observations
+for idx, obs_list in feature_activations.items():
+    print(f"Feature {idx} activated strongly {len(obs_list)} times.")
+    # Visualize first 4 observations in a grid
+    num_visualize = min(4, len(obs_list))
+    fig, axs = plt.subplots(2, 2, figsize=(8, 8))
+    fig.suptitle(f'Feature {idx} Activations')
+    for i in range(num_visualize):
+        obs, activation_value = obs_list[i]
+        save_obs = obs
+        obs = einops.rearrange(obs[0], "c h w -> w h c")
+        row, col = divmod(i, 2)
+        axs[row, col].imshow(obs)
+        axs[row, col].set_title(f'Activation: {activation_value:.2f}')
+        axs[row, col].axis('off')
+    
+    # If less than 4 observations, remove empty subplots
+    for i in range(num_visualize, 4):
+        row, col = divmod(i, 2)
+        fig.delaxes(axs[row, col])
+    
+    plt.tight_layout()
+    plt.show()
+
+# %%
+# Plot activation frequencies as bars
+plt.figure(figsize=(12, 6))
+activation_counts = [len(obs_list) for obs_list in feature_activations.values()]
+feature_indices = list(feature_activations.keys())
+
+plt.bar(feature_indices, activation_counts)
+plt.xlabel('Feature Index')
+plt.ylabel('Activation Frequency')
+plt.title('Feature Activation Frequencies')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+# Calculate and print some statistics
+total_activations = sum(activation_counts)
+mean_activations = total_activations / len(feature_indices)
+max_activations = max(activation_counts)
+min_activations = min(activation_counts)
+
+print(f"Total activations: {total_activations}")
+print(f"Mean activations per feature: {mean_activations:.2f}")
+print(f"Max activations for a single feature: {max_activations}")
+print(f"Min activations for a single feature: {min_activations}")
+
+# %%
+print(feature_activations)
