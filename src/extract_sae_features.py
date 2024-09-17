@@ -146,7 +146,7 @@ class SAE(nn.Module):
         L_sparsity = acts.abs().mean()
         loss = L_reconstruction + self.cfg.l1_coeff * L_sparsity
 
-        return loss, L_reconstruction, L_sparsity, acts
+        return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
 
 # Function to load the main model (policy network)
 def load_interpretable_model(model_path="../model_interpretable.pt"):
@@ -413,3 +413,120 @@ print(f"Min activations for a single feature: {min_activations}")
 
 # %%
 print(feature_activations)
+
+# %%
+
+def replace_layer_with_sae(model, sae, layer_number):
+    # Get the layer name
+    layer_name = ordered_layer_names[layer_number]
+    # Locate the module
+    elements = layer_name.split('.')
+    module = model
+    for element in elements:
+        if '[' in element and ']' in element:
+            base, idx = element.split('[')
+            idx = int(idx[:-1])
+            module = getattr(module, base)[idx]
+        else:
+            module = getattr(module, element)
+
+    # Define the hook function
+    def hook_fn(module, input, output):
+        # Flatten output
+        h = output.view(output.size(0), -1).to(device)
+        # Pass through SAE
+        _, _, _, acts, h_reconstructed = sae(h)
+        # Reshape h_reconstructed back to original shape
+        h_reconstructed = h_reconstructed.view_as(output)
+        return h_reconstructed
+
+    # Register the forward hook
+    handle = module.register_forward_hook(hook_fn)
+    return handle  # Return the handle to remove the hook later
+
+def measure_logit_difference(model, sae, layer_number, num_samples=100):
+    # Generate observations
+    observations = []
+    env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+    obs = env.reset()
+    for _ in range(num_samples):
+        observations.append(obs[0].copy())
+        action = env.action_space.sample()
+        obs, reward, done, info = env.step(np.array([action]))
+        if done[0]:
+            obs = env.reset()
+
+    # Convert observations to tensor
+    obs_tensor = t.tensor(np.array(observations), dtype=t.float32)
+    print(obs_tensor.shape)
+    obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
+    print(obs_tensor.shape)
+
+    # Get logits without SAE
+    with t.no_grad():
+        outputs = model(obs_tensor)
+        logits_without_sae = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+        logits_without_sae = logits_without_sae.cpu().numpy()
+
+    # Register the hook to replace the layer with SAE outputs
+    handle = replace_layer_with_sae(model, sae, layer_number)
+
+    # Get logits with SAE
+    with t.no_grad():
+        outputs = model(obs_tensor)
+        logits_with_sae = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+        logits_with_sae = logits_with_sae.cpu().numpy()
+
+    # Remove the hook
+    handle.remove()
+
+    # Compute differences
+    logit_differences = logits_with_sae - logits_without_sae
+
+    # Return the differences
+    return logits_without_sae, logits_with_sae, logit_differences
+
+# Assuming you have trained the SAE for the desired layer
+layer_number = 8  # Replace with your target layer number
+
+# Measure logit differences
+logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
+    model, sae, layer_number, num_samples=100
+)
+
+# Analyze the differences
+mean_difference = np.mean(np.abs(logit_differences))
+print(f"Mean absolute difference in logits: {mean_difference}")
+
+# Optionally, visualize the differences
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 6))
+plt.hist(logit_differences.flatten(), bins=50)
+plt.title(f'Histogram of Logit Differences (Layer {layer_number})')
+plt.xlabel('Logit Difference')
+plt.ylabel('Frequency')
+plt.show()
+
+# %%
+# Load the trained SAE and model
+sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
+
+# Measure the logit differences
+logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
+    model, sae, layer_number, num_samples=100
+)
+
+# Compute statistics
+mean_abs_diff = np.mean(np.abs(logit_differences))
+max_abs_diff = np.max(np.abs(logit_differences))
+print(f"Mean absolute difference in logits: {mean_abs_diff}")
+print(f"Max absolute difference in logits: {max_abs_diff}")
+
+# Visualize
+plt.figure(figsize=(10, 6))
+plt.hist(logit_differences.flatten(), bins=50)
+plt.title(f'Histogram of Logit Differences (Layer {layer_number})')
+plt.xlabel('Logit Difference')
+plt.ylabel('Frequency')
+plt.show()
