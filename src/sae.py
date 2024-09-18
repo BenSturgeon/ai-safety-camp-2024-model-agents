@@ -60,6 +60,9 @@ layer_types = {
     'dropout_conv': 'dropout_conv',
     'dropout_fc': 'dropout_fc'
 }
+
+
+
 # %%
 # ModelActivations class modified for batch processing
 class ModelActivations:
@@ -237,18 +240,18 @@ def get_layer_hyperparameters(layer_name, layer_types):
     if layer_type == 'conv':
         return {
             'd_hidden': 512,     # Example value for conv layers
-            'l1_coeff': 0.001     # Example value for conv layers
+            'l1_coeff': 0.0001     # Example value for conv layers
         }
     elif layer_type == 'fc':
         return {
             'd_hidden': 2048,    # Example value for fully connected layers
-            'l1_coeff': 0.001      # Example value for fully connected layers
+            'l1_coeff': 0.0001      # Example value for fully connected layers
         }
     else:
         # Default hyperparameters for other layer types (e.g., pooling, dropout)
         return {
             'd_hidden': 256,     # Example default value
-            'l1_coeff': 0.001    # Example default value
+            'l1_coeff': 0.0001    # Example default value
         }
 
 # Training function for SAE with checkpointing and wandb logging
@@ -257,7 +260,9 @@ def train_sae(
     model,
     model_activations,
     layer_number,
-    batch_size=16,
+    global_mean,
+    global_std,
+    batch_size=64,
     steps=200,  # Reduced steps to 100 (1/10th of 1000)
     lr=1e-3,
     num_envs=4,
@@ -325,9 +330,11 @@ def train_sae(
             # Before feeding into the SAE
 
             batch = activations.to(device)
-            batch_mean = batch.mean(dim=0, keepdim=True)
-            batch_std = batch.std(dim=0, keepdim=True) + 1e-8
-            batch_normalized = (batch - batch_mean) / batch_std
+            # batch_mean = batch.mean(dim=0, keepdim=True)
+            # batch_std = batch.std(dim=0, keepdim=True) + 1e-8
+            # batch_normalized = (batch - batch_mean) / batch_std
+            batch_normalized = (batch - global_mean) / global_std
+
         except Exception as e:
             print(f"Error during activation generation: {e}")
             continue  # Skip this iteration and proceed
@@ -358,48 +365,35 @@ def train_sae(
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
 
-            if step % 100 == 0 or step == steps - 1:
-                import matplotlib.pyplot as plt
-                import io
-                from PIL import Image
+            import matplotlib.pyplot as plt
+            import io
+            from PIL import Image
+            # Create a figure for activation comparison
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
 
-                # Assuming batch and h_reconstructed are tensors of shape [batch_size, d_in]
-                idx = 0  # Index of the sample to visualize
-                plt.figure(figsize=(12, 6))
-                plt.subplot(1, 2, 1)
-                plt.title('Original Activation')
-                plt.plot(batch[idx].cpu().numpy())
+            ax1.set_title('Original Activation')
+            ax1.plot(batch[0].cpu().numpy())
 
-                plt.subplot(1, 2, 2)
-                plt.title('Reconstructed Activation')
-                plt.plot(h_reconstructed[idx].detach().cpu().numpy())
+            ax2.set_title('Reconstructed Activation')
+            ax2.plot(h_reconstructed[0].detach().cpu().numpy())
 
-                # Save the plot to a buffer
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
+            # Log the matplotlib figure directly to wandb
+            wandb.log({"activation_comparison": wandb.Image(fig)}, step=step)
 
-                # Convert the buffer to an image
-                image = Image.open(buf)
+            # Close the figure
+            plt.close(fig)
 
-                # Log the image to wandb
-                wandb.log({"activations": wandb.Image(image)}, step=step)
-
-                plt.close()
-
-
-            # Log to wandb
+            # Log other metrics to wandb
             wandb.log({
-            "step": step,
-            "loss": loss.item(),
-            "reconstruction_loss": L_reconstruction.item(),
-            "sparsity_loss": L_sparsity.item(),
-            "acts_mean": acts_mean,
-            "acts_min": acts_min,
-            "acts_max": acts_max,
-            "variance_explained": variance_explained
-        })
-
+                "step": step,
+                "loss": loss.item(),
+                "reconstruction_loss": L_reconstruction.item(),
+                "sparsity_loss": L_sparsity.item(),
+                "acts_mean": acts_mean,
+                "acts_min": acts_min,
+                "acts_max": acts_max,
+                "variance_explained": variance_explained,
+            })
         # Save checkpoint every 100 steps
         if (step + 1) % 100 == 0 or step == steps - 1:
             checkpoint_path = os.path.join(layer_checkpoint_dir, f'sae_checkpoint_step_{step+1}.pt')
@@ -433,6 +427,8 @@ model = load_interpretable_model()
 model.to(device)
 model.eval()  # Set model to evaluation mode
 
+
+
 # Function to train SAEs for all layers
 def train_all_layers(
     model,
@@ -460,6 +456,14 @@ def train_all_layers(
 
         # Initialize ModelActivations
         model_activations = ModelActivations(model, layer_paths=layer_paths)
+        activation_samples = []
+        for _ in range(25):
+            activations = generate_batch_activations_parallel(model, model_activations, layer_number, batch_size=32)
+            activation_samples.append(activations)
+
+        all_activations = torch.cat(activation_samples, dim=0)
+        global_mean = all_activations.mean(dim=0, keepdim=True).to(device)
+        global_std = (all_activations.std(dim=0, keepdim=True) + 1e-8).to(device)
 
         # Generate a sample activation to determine input dimension
         sample_activations = generate_batch_activations_parallel(
@@ -484,6 +488,8 @@ def train_all_layers(
             model=model,
             model_activations=model_activations,
             layer_number=layer_number,
+            global_mean=global_mean,
+            global_std=global_std,
             batch_size=batch_size,   # Adjust based on your hardware
             steps=steps_per_layer,   # Reduced number of steps
             lr=lr,
