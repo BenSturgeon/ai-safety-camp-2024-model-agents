@@ -101,6 +101,32 @@ class ModelActivations:
         outputs = self.model(inputs)
         return outputs, self.activations
 
+
+def jump_relu(x, jump_value=0.1):
+    return torch.where(x > 0, x + jump_value, torch.zeros_like(x))
+
+import torch
+
+def topk_activation(x, k):
+    """
+    Applies Top-k activation to the input tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor of shape (batch_size, num_features).
+        k (int): Number of top activations to keep per sample.
+
+    Returns:
+        torch.Tensor: Tensor with only the top k activations per sample kept.
+    """
+    # Get the top k values and their indices along dimension 1
+    values, indices = torch.topk(x, k=k, dim=1)
+    # Create a mask of zeros and scatter ones at the indices of top k values
+    mask = torch.zeros_like(x)
+    mask.scatter_(1, indices, 1)
+    # Multiply the input by the mask to keep only top k activations
+    return x * mask
+
+
 # SAE configuration and class
 @dataclass
 class SAEConfig:
@@ -109,6 +135,7 @@ class SAEConfig:
     l1_coeff: float = 0.1
     weight_normalize_eps: float = 1e-8
     tied_weights: bool = False
+    jump_value: float = 0.1  # New parameter for Jump ReLU
 
 class SAE(nn.Module):
     def __init__(self, cfg: SAEConfig):
@@ -116,28 +143,25 @@ class SAE(nn.Module):
         self.cfg = cfg
 
         # Encoder weights and biases
-        self.W_enc = nn.Parameter(
-            nn.init.kaiming_uniform_(t.empty(self.cfg.d_in, self.cfg.d_hidden))
-        )
-        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden))
+        self.W_enc = nn.Parameter(torch.randn(self.cfg.d_in, self.cfg.d_hidden) * 0.01)
+        self.b_enc = nn.Parameter(torch.zeros(self.cfg.d_hidden))
 
         # Decoder weights and biases
         if self.cfg.tied_weights:
             self.W_dec = self.W_enc.t()
         else:
-            self.W_dec = nn.Parameter(
-                nn.init.kaiming_uniform_(t.empty(self.cfg.d_hidden, self.cfg.d_in))
-            )
-        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in))
+            self.W_dec = nn.Parameter(torch.randn(self.cfg.d_hidden, self.cfg.d_in) * 0.01)
+        self.b_dec = nn.Parameter(torch.zeros(self.cfg.d_in))
 
         self.to(device)
 
     def forward(self, h):
         # Encoder
-        acts = F.leaky_relu(t.matmul(h, self.W_enc) + self.b_enc)
+        z = torch.matmul(h, self.W_enc) + self.b_enc
+        acts = jump_relu(z, jump_value=self.cfg.jump_value)
 
         # Decoder
-        h_reconstructed = t.tanh(t.matmul(acts, self.W_dec) + self.b_dec)  # [batch_size, d_in]
+        h_reconstructed = t.matmul(acts, self.W_dec) + self.b_dec  # [batch_size, d_in]
 
         # Loss components
         L_reconstruction = F.mse_loss(h_reconstructed, h, reduction='mean')
@@ -145,6 +169,10 @@ class SAE(nn.Module):
         loss = L_reconstruction + self.cfg.l1_coeff * L_sparsity
 
         return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
+
+
+def jump_relu(x, jump_value=0.1):
+    return torch.where(x > 0, x + jump_value, torch.zeros_like(x))
 
 # Function to generate batch activations in parallel
 def generate_batch_activations_parallel(model, model_activations, layer_number, batch_size=32, num_envs=8, episode_length=150):
@@ -208,19 +236,19 @@ def get_layer_hyperparameters(layer_name, layer_types):
     layer_type = layer_types.get(layer_name, 'other')
     if layer_type == 'conv':
         return {
-            'd_hidden': 124,     # Example value for conv layers
-            'l1_coeff': 0.01     # Example value for conv layers
+            'd_hidden': 512,     # Example value for conv layers
+            'l1_coeff': 0.001     # Example value for conv layers
         }
     elif layer_type == 'fc':
         return {
-            'd_hidden': 1024,    # Example value for fully connected layers
-            'l1_coeff': 0.01      # Example value for fully connected layers
+            'd_hidden': 2048,    # Example value for fully connected layers
+            'l1_coeff': 0.001      # Example value for fully connected layers
         }
     else:
         # Default hyperparameters for other layer types (e.g., pooling, dropout)
         return {
             'd_hidden': 256,     # Example default value
-            'l1_coeff': 0.01    # Example default value
+            'l1_coeff': 0.001    # Example default value
         }
 
 # Training function for SAE with checkpointing and wandb logging
@@ -329,6 +357,36 @@ def train_sae(
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
+
+            if step % 100 == 0 or step == steps - 1:
+                import matplotlib.pyplot as plt
+                import io
+                from PIL import Image
+
+                # Assuming batch and h_reconstructed are tensors of shape [batch_size, d_in]
+                idx = 0  # Index of the sample to visualize
+                plt.figure(figsize=(12, 6))
+                plt.subplot(1, 2, 1)
+                plt.title('Original Activation')
+                plt.plot(batch[idx].cpu().numpy())
+
+                plt.subplot(1, 2, 2)
+                plt.title('Reconstructed Activation')
+                plt.plot(h_reconstructed[idx].detach().cpu().numpy())
+
+                # Save the plot to a buffer
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+
+                # Convert the buffer to an image
+                image = Image.open(buf)
+
+                # Log the image to wandb
+                wandb.log({"activations": wandb.Image(image)}, step=step)
+
+                plt.close()
+
 
             # Log to wandb
             wandb.log({
