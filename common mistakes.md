@@ -35,3 +35,16 @@ if observation.dim() == 3:
 Make sure to not change images to type int when plotting
 plt.imshow(obs.astype(np.uint8)) # not this!
 plt.imshow(obs) # this!
+
+# wrapping obs with numpy when getting dsi
+sometimes you might get this error when trying to run the environment
+
+RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
+if this happens the fix may be to wrap the observation with a numpy array
+obs_tensor = t.tensor(np.array(obs), dtype=t.float32)
+print(obs_tensor.shape)
+obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
+
+# For discussion of training objectives in SAEs look here
+https://www.alignmentforum.org/posts/CkFBMG6A9ytkiXBDM/sparse-autoencoders-future-work

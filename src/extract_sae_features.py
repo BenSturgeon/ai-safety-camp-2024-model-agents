@@ -296,31 +296,6 @@ def collect_strong_activations(sae, model, layer_number, threshold=1.0, num_epis
 # Main script to load SAE, collect features, and visualize them
 # %%
 
-
-# Specify the layer number and path to the trained SAE model
-layer_number = 8  # For example, 'conv4a'
-sae_model_path = '../checkpoints/checkpoints_batch2/layer_6_conv3a/sae_checkpoint_step_100.pt'  # Path to your saved SAE model
-
-
-checkpoint = t.load(sae_model_path, map_location=device)
-
-
-# sae_cfg = SAEConfig(
-#     d_in=2048,          # Input dimension as per checkpoint
-#     d_hidden=124,       # Hidden dimension as per checkpoint
-#     l1_coeff=0.05,
-#     tied_weights=False
-# )
-
-# Initialize SAE
-# sae = SAE(sae_cfg)
-
-# Load state dict
-sae.load_state_dict(checkpoint['model_state_dict'])
-sae.to(device)
-sae.eval()  # Set to evaluation mode
-# %%
-
 # Load the main model
 model = helpers.load_interpretable_model()
 model.to(device)
@@ -498,8 +473,13 @@ def measure_logit_difference(model, sae, layer_number, num_samples=100):
 
 # %%
 
+
+
+sae_model_path = '../checkpoints/checkpoints_batch2/layer_1_conv1a/sae_checkpoint_step_100.pt'  # Path to your saved SAE model
+
+
 # # Assuming you have trained the SAE for the desired layer
-layer_number = 6  # Replace with your target layer number
+layer_number = 1  # Replace with your target layer number
 sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
 # %%
 # Measure logit differences
@@ -548,9 +528,9 @@ plt.show()
 def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
     # Function to run episodes and collect total rewards
     def run_episodes(model, num_episodes, save_gif=False):
-        env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
         total_rewards = []
         for episode in range(num_episodes):
+            env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
             obs = env.reset()
             done = False
             total_reward = 0
@@ -575,7 +555,11 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
             
             if save_gif:
                 import imageio
-                imageio.mimsave(f'episode_{episode}_{save_gif}.gif', frames, fps=30)
+                
+                # Save the gif
+                gif_path = f'episode_{episode}_{save_gif}.gif'
+                imageio.mimsave(gif_path, frames, fps=30)
+
         
         env.close()
         return total_rewards
@@ -589,7 +573,7 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
     # Run episodes with SAE
     model.eval()
-    rewards_with_sae = run_episodes(model, num_episodes, save_gif=False)
+    rewards_with_sae = run_episodes(model, num_episodes, save_gif=True)
 
     # Remove the hook
     handle.remove()
@@ -603,5 +587,21 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
     return rewards_without_sae, rewards_with_sae
 
+sae_model_path = 'checkpoints/layer_8_conv4a/sae_checkpoint_step_3700.pt'  # Path to your saved SAE model
+
+
+# # Assuming you have trained the SAE for the desired layer
+layer_number = 8  # Replace with your target layer number
+sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
+# %%
+# Measure logit differences
+logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
+    model, sae, layer_number, num_samples=100
+)
+
+
 model = load_interpretable_model().to(device)
-evaluate_model_performance(model, sae, 6 , 10)
+evaluate_model_performance(model, sae, layer_number , 4)
+
+# %%
+
