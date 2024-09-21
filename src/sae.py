@@ -1,27 +1,27 @@
+# sae.py
+
+import os
+import sys
+import glob
+import random
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm.auto import tqdm
 import numpy as np
-import random
-import math
 from dataclasses import dataclass
-import einops
+from tqdm.auto import tqdm
 import wandb
-import os
-import sys
-import glob
+import einops
+import math
 
-# Append parent directory to import modules
+# Import your heist environment module
 sys.path.append('../')  # Adjust the path if necessary to import your modules
-
-import notebooks.heist as heist  # Import your heist environment module
+import notebooks.heist as heist
 
 # Set device
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
-# device = t.device("cpu")
 
 # Ordered layer names
 ordered_layer_names = {
@@ -61,9 +61,6 @@ layer_types = {
     'dropout_fc': 'dropout_fc'
 }
 
-
-
-# %%
 # ModelActivations class modified for batch processing
 class ModelActivations:
     def __init__(self, model, layer_paths):
@@ -104,11 +101,8 @@ class ModelActivations:
         outputs = self.model(inputs)
         return outputs, self.activations
 
-
 def jump_relu(x, jump_value=0.1):
-    return torch.where(x > 0, x + jump_value, torch.zeros_like(x))
-
-import torch
+    return t.where(x > 0, x + jump_value, t.zeros_like(x))
 
 def topk_activation(x, k):
     """
@@ -122,13 +116,12 @@ def topk_activation(x, k):
         torch.Tensor: Tensor with only the top k activations per sample kept.
     """
     # Get the top k values and their indices along dimension 1
-    values, indices = torch.topk(x, k=k, dim=1)
+    values, indices = t.topk(x, k=k, dim=1)
     # Create a mask of zeros and scatter ones at the indices of top k values
-    mask = torch.zeros_like(x)
+    mask = t.zeros_like(x)
     mask.scatter_(1, indices, 1)
     # Multiply the input by the mask to keep only top k activations
     return x * mask
-
 
 # SAE configuration and class
 @dataclass
@@ -138,7 +131,7 @@ class SAEConfig:
     l1_coeff: float = 0.1
     weight_normalize_eps: float = 1e-8
     tied_weights: bool = False
-    jump_value: float = 0.1  # New parameter for Jump ReLU
+    jump_value: float = 0.1  # Parameter for Jump ReLU
 
 class SAE(nn.Module):
     def __init__(self, cfg: SAEConfig):
@@ -146,21 +139,23 @@ class SAE(nn.Module):
         self.cfg = cfg
 
         # Encoder weights and biases
-        self.W_enc = nn.Parameter(torch.randn(self.cfg.d_in, self.cfg.d_hidden) * 0.01)
-        self.b_enc = nn.Parameter(torch.zeros(self.cfg.d_hidden))
+        self.W_enc = nn.Parameter(t.empty(self.cfg.d_in, self.cfg.d_hidden))
+        nn.init.kaiming_uniform_(self.W_enc, nonlinearity='relu')
+        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden))
 
         # Decoder weights and biases
         if self.cfg.tied_weights:
             self.W_dec = self.W_enc.t()
         else:
-            self.W_dec = nn.Parameter(torch.randn(self.cfg.d_hidden, self.cfg.d_in) * 0.01)
-        self.b_dec = nn.Parameter(torch.zeros(self.cfg.d_in))
+            self.W_dec = nn.Parameter(t.empty(self.cfg.d_hidden, self.cfg.d_in))
+            nn.init.kaiming_uniform_(self.W_dec, nonlinearity='relu')
+        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in))
 
         self.to(device)
 
     def forward(self, h):
         # Encoder
-        z = torch.matmul(h, self.W_enc) + self.b_enc
+        z = t.matmul(h, self.W_enc) + self.b_enc
         acts = jump_relu(z, jump_value=self.cfg.jump_value)
 
         # Decoder
@@ -173,17 +168,13 @@ class SAE(nn.Module):
 
         return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
 
-
-def jump_relu(x, jump_value=0.1):
-    return torch.where(x > 0, x + jump_value, torch.zeros_like(x))
-
 # Function to generate batch activations in parallel
 def generate_batch_activations_parallel(model, model_activations, layer_number, batch_size=32, num_envs=8, episode_length=150):
     """
     Generate activations from multiple environments running in parallel.
     """
     # Create vectorized environments
-    venv = heist.create_venv(num=num_envs, num_levels=1, start_level=random.randint(1, 100000))
+    venv = heist.create_venv(num=num_envs, num_levels=10000000000, start_level=random.randint(1, 100000))
 
     activation_buffer = []
 
@@ -260,23 +251,28 @@ def train_sae(
     model,
     model_activations,
     layer_number,
+    layer_name,
     batch_size=64,
-    steps=200,  # Reduced steps to 100 (1/10th of 1000)
+    steps=200,
     lr=1e-3,
     num_envs=4,
     episode_length=150,
     log_freq=10,
     checkpoint_dir='checkpoints',
-    stats_dir="global_stats",
+    stats_dir='global_stats',
     wandb_project="SAE_training",
 ):
-
+    # Load global statistics
     stats_path = os.path.join(stats_dir, f'layer_{layer_number}_{layer_name}_stats.pt')
-    stats = torch.load(stats_path, map_location=device)
+    if not os.path.exists(stats_path):
+        raise FileNotFoundError(f"Global stats file not found for layer {layer_number}: {stats_path}")
+    stats = t.load(stats_path, map_location=device)
     global_mean = stats['mean'].to(device)
     global_std = stats['std'].to(device)
-    # Unique identifier for each layer to manage separate checkpoints and wandb runs
-    layer_identifier = f'layer_{layer_number}_{ordered_layer_names[layer_number]}'
+    print(global_mean,global_std)
+
+    # Unique identifier for each layer to man age separate checkpoints and wandb runs
+    layer_identifier = f'layer_{layer_number}_{layer_name}'
 
     # Define a separate directory for each layer's checkpoints
     layer_checkpoint_dir = os.path.join(checkpoint_dir, layer_identifier)
@@ -330,13 +326,9 @@ def train_sae(
                 model, model_activations, layer_number,
                 batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
             )
-            # Move activations directly to the device
-            # Before feeding into the SAE
-
+            # Move activations to the device
             batch = activations.to(device)
-            # batch_mean = batch.mean(dim=0, keepdim=True)
-            # batch_std = batch.std(dim=0, keepdim=True) + 1e-8
-            # batch_normalized = (batch - batch_mean) / batch_std
+            # Normalize using global statistics
             batch_normalized = (batch - global_mean) / global_std
 
         except Exception as e:
@@ -345,7 +337,7 @@ def train_sae(
 
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(batch_normalized)
-        nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
+        # nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
         loss.backward()
         optimizer.step()
 
@@ -369,6 +361,7 @@ def train_sae(
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
 
+
             import matplotlib.pyplot as plt
             import io
             from PIL import Image
@@ -381,13 +374,7 @@ def train_sae(
             ax2.set_title('Reconstructed Activation')
             ax2.plot(h_reconstructed[0].detach().cpu().numpy())
 
-            # Log the matplotlib figure directly to wandb
-            wandb.log({"activation_comparison": wandb.Image(fig)}, step=step)
-
-            # Close the figure
-            plt.close(fig)
-
-            # Log other metrics to wandb
+            # Log metrics to wandb
             wandb.log({
                 "step": step,
                 "loss": loss.item(),
@@ -397,7 +384,10 @@ def train_sae(
                 "acts_min": acts_min,
                 "acts_max": acts_max,
                 "variance_explained": variance_explained,
-            })
+                "activation_comparison": wandb.Image(fig)
+            }, step=step)
+
+            plt.close(fig)
         # Save checkpoint every 100 steps
         if (step + 1) % 100 == 0 or step == steps - 1:
             checkpoint_path = os.path.join(layer_checkpoint_dir, f'sae_checkpoint_step_{step+1}.pt')
@@ -412,8 +402,6 @@ def train_sae(
     wandb.finish()
     return loss_history, L_reconstruction_history, L_sparsity_history, variance_explained_history
 
-# Example usage:
-
 # Load your model
 def load_interpretable_model(model_path="../model_interpretable.pt"):
     import gym
@@ -426,11 +414,64 @@ def load_interpretable_model(model_path="../model_interpretable.pt"):
     model.load_from_file(model_path, device=device)
     return model
 
-# Load the model
-model = load_interpretable_model()
-model.to(device)
-model.eval()  # Set model to evaluation mode
+# Function to compute and save global statistics for a layer
+def compute_and_save_global_stats(
+    model,
+    layer_number,
+    layer_name,
+    num_samples=10000,
+    batch_size=64,
+    num_envs=4,
+    save_dir='global_stats'
+):
+    """
+    Computes and saves the global mean and std for a given layer's activations.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    # Define layer paths for activation capture
+    layer_paths = [layer_name]
+    # Initialize ModelActivations
+    model_activations = ModelActivations(model, layer_paths=layer_paths)
+    activation_samples = []
+    total_samples = 0
+    with tqdm(total=num_samples, desc=f'Computing global stats for {layer_name}') as pbar:
+        while total_samples < num_samples:
+            activations = generate_batch_activations_parallel(
+                model, model_activations, layer_number, batch_size=batch_size, num_envs=num_envs
+            )
+            activation_samples.append(activations)
+            total_samples += activations.size(0)
+            pbar.update(activations.size(0))
+    all_activations = t.cat(activation_samples, dim=0)[:num_samples]
+    global_mean = all_activations.mean(dim=0, keepdim=True)
+    global_std = all_activations.std(dim=0, keepdim=True) + 1e-8
+    # Save to disk
+    t.save({'mean': global_mean, 'std': global_std},
+           os.path.join(save_dir, f'layer_{layer_number}_{layer_name}_stats.pt'))
+    # Clear hooks
+    model_activations.clear_hooks()
 
+# Function to compute global stats for all layers
+def compute_global_stats_for_all_layers(
+    model,
+    ordered_layer_names,
+    num_samples_per_layer=10000,
+    batch_size=64,
+    num_envs=4,
+    save_dir='global_stats'
+):
+    for layer_number, layer_name in ordered_layer_names.items():
+        compute_and_save_global_stats(
+            model,
+            layer_number,
+            layer_name,
+            num_samples=num_samples_per_layer,
+            batch_size=batch_size,
+            num_envs=num_envs,
+            save_dir=save_dir
+        )
+
+# Function to train SAEs for all layers
 def train_all_layers(
     model,
     ordered_layer_names,
@@ -474,14 +515,15 @@ def train_all_layers(
         )
 
         # Initialize SAE
-        sae = SAE(sae_cfg)
+        sae_model = SAE(sae_cfg)
 
         # Train SAE
-        train_sae(
-            sae=sae,
+        loss_history, L_reconstruction_history, L_sparsity_history, variance_explained_history = train_sae(
+            sae=sae_model,
             model=model,
             model_activations=model_activations,
             layer_number=layer_number,
+            layer_name=layer_name,
             batch_size=batch_size,
             steps=steps_per_layer,
             lr=lr,
@@ -493,44 +535,24 @@ def train_all_layers(
             wandb_project=wandb_project,
         )
 
+        # Optional: Plot training losses for the current layer
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(12, 4))
+        plt.subplot(1, 3, 1)
+        plt.plot(loss_history)
+        plt.title(f'Layer {layer_number} Total Loss')
+
+        plt.subplot(1, 3, 2)
+        plt.plot(L_reconstruction_history)
+        plt.title(f'Layer {layer_number} Reconstruction Loss')
+
+        plt.subplot(1, 3, 3)
+        plt.plot(L_sparsity_history)
+        plt.title(f'Layer {layer_number} Sparsity Loss')
+
+        plt.tight_layout()
+        plt.show()
+
         # Clear hooks to prevent accumulation
         model_activations.clear_hooks()
-
-
-# %%
-
-def compute_and_save_global_stats(
-    model,
-    layer_number,
-    layer_name,
-    num_samples=100,
-    batch_size=64,
-    num_envs=4,
-    save_dir='global_stats'
-):
-    """
-    Computes and saves the global mean and std for a given layer's activations.
-    """
-    os.makedirs(save_dir, exist_ok=True)
-    # Define layer paths for activation capture
-    layer_paths = [layer_name]
-    # Initialize ModelActivations
-    model_activations = ModelActivations(model, layer_paths=layer_paths)
-    activation_samples = []
-    total_samples = 0
-    with tqdm(total=num_samples, desc=f'Computing global stats for {layer_name}') as pbar:
-        while total_samples < num_samples:
-            activations = generate_batch_activations_parallel(
-                model, model_activations, layer_number, batch_size=batch_size, num_envs=num_envs
-            )
-            activation_samples.append(activations)
-            total_samples += activations.size(0)
-            pbar.update(activations.size(0))
-    all_activations = torch.cat(activation_samples, dim=0)[:num_samples]
-    global_mean = all_activations.mean(dim=0, keepdim=True)
-    global_std = all_activations.std(dim=0, keepdim=True) + 1e-8
-    # Save to disk
-    torch.save({'mean': global_mean, 'std': global_std},
-               os.path.join(save_dir, f'layer_{layer_number}_{layer_name}_stats.pt'))
-    # Clear hooks
-    model_activations.clear_hooks()
