@@ -96,8 +96,11 @@ class ModelActivations:
     
     def run_with_cache(self, inputs):
         self.activations = {}
-        inputs = einops.rearrange(inputs, "b h c w -> b w c h ")
-        inputs = inputs.to(next(self.model.parameters()).device)
+        # Check if inputs have the expected shape (batch_size, 3, 64, 64)
+        if inputs.shape[1:] != (3, 64, 64):
+            # If not, rearrange the inputs to the expected shape
+            inputs = einops.rearrange(inputs, "b h c w -> b w c h ").to(device)
+        inputs = inputs.to(next(self.model.parameters()).to(device))
         outputs = self.model(inputs)
         return outputs, self.activations
 
@@ -174,17 +177,19 @@ def generate_batch_activations_parallel(model, model_activations, layer_number, 
     Generate activations from multiple environments running in parallel.
     """
     # Create vectorized environments
-    venv = heist.create_venv(num=num_envs, num_levels=10000000000, start_level=random.randint(1, 100000))
+    venv = heist.create_venv(num=num_envs, num_levels=0, start_level=random.randint(1, 100000))
 
     activation_buffer = []
+    obs_buffer = []
+    activation_shape = None  # To be set later
 
     obs = venv.reset()
     dones = [False] * num_envs
     steps = 0
 
-    while len(activation_buffer) < batch_size:
-        # Convert observations to tensors without permuting
-        observations = t.tensor(obs, dtype=t.float32)  # Shape: [batch_size, height, width, channels]
+    while len(activation_buffer) * num_envs < batch_size:
+        # Convert observations to tensors and move to GPU
+        observations = t.tensor(obs, dtype=t.float32).to(device)  # Shape: [num_envs, height, width, channels]
 
         # Run the model and capture activations
         with t.no_grad():
@@ -194,9 +199,13 @@ def generate_batch_activations_parallel(model, model_activations, layer_number, 
         layer_name = ordered_layer_names[layer_number]
         layer_activation = activations[layer_name.replace('.', '_')]
 
+        if activation_shape is None:
+            activation_shape = layer_activation.shape[1:]  # Exclude batch dimension
+
         # Flatten activations and append to the buffer
-        batch_layer_activations = layer_activation.view(layer_activation.size(0), -1)
-        activation_buffer.append(batch_layer_activations.cpu())
+        batch_layer_activations = layer_activation.reshape(layer_activation.size(0), -1)
+        activation_buffer.append(batch_layer_activations)
+        obs_buffer.append(observations)
 
         # Get actions from the model outputs
         logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
@@ -210,9 +219,13 @@ def generate_batch_activations_parallel(model, model_activations, layer_number, 
 
     venv.close()
 
+    # Concatenate buffers
     activations_tensor = t.cat(activation_buffer, dim=0)[:batch_size]
+    observations_tensor = t.cat(obs_buffer, dim=0)[:batch_size]
 
-    return activations_tensor
+    return activations_tensor, observations_tensor, activation_shape
+
+
 
 # Helper function to find the latest checkpoint
 def find_latest_checkpoint(checkpoint_dir):
@@ -245,17 +258,16 @@ def get_layer_hyperparameters(layer_name, layer_types):
             'l1_coeff': 0.0001    # Example default value
         }
 
-# Training function for SAE with checkpointing and wandb logging
 def train_sae(
     sae,
     model,
     model_activations,
     layer_number,
     layer_name,
-    batch_size=64,
+    batch_size=128,
     steps=200,
     lr=1e-3,
-    num_envs=4,
+    num_envs=64,
     episode_length=150,
     log_freq=10,
     checkpoint_dir='checkpoints',
@@ -269,9 +281,9 @@ def train_sae(
     stats = t.load(stats_path, map_location=device)
     global_mean = stats['mean'].to(device)
     global_std = stats['std'].to(device)
-    print(global_mean,global_std)
+    print(global_mean, global_std)
 
-    # Unique identifier for each layer to man age separate checkpoints and wandb runs
+    # Unique identifier for each layer to manage separate checkpoints and wandb runs
     layer_identifier = f'layer_{layer_number}_{layer_name}'
 
     # Define a separate directory for each layer's checkpoints
@@ -313,23 +325,38 @@ def train_sae(
         }, name=f"SAE_{layer_identifier}")
         start_step = 0
 
+    # Get the module at the specified layer
+    def get_module_by_path(model, layer_path):
+        elements = layer_path.split('.')
+        module = model
+        for element in elements:
+            if '[' in element and ']' in element:
+                base, idx = element.split('[')
+                idx = int(idx[:-1])
+                module = getattr(module, base)[idx]
+            else:
+                module = getattr(module, element)
+        return module
+
+    module_at_layer = get_module_by_path(model, layer_name)
+
     progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
     variance_explained_history = []
+    logits_diff_history = []
 
+    model.eval()
     for step in progress_bar:
         try:
-            # Generate batch activations
-            activations = generate_batch_activations_parallel(
+            # Generate batch activations and observations (already on GPU)
+            activations, observations, activation_shape = generate_batch_activations_parallel(
                 model, model_activations, layer_number,
                 batch_size=batch_size, num_envs=num_envs, episode_length=episode_length
             )
-            # Move activations to the device
-            batch = activations.to(device)
             # Normalize using global statistics
-            batch_normalized = (batch - global_mean) / global_std
+            batch_normalized = (activations - global_mean) / global_std
 
         except Exception as e:
             print(f"Error during activation generation: {e}")
@@ -338,13 +365,47 @@ def train_sae(
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(batch_normalized)
         # nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
-        loss.backward()
+
+        # Reshape h_reconstructed back to original activation shape
+        batch_size_curr = h_reconstructed.size(0)
+        h_reconstructed_reshaped = h_reconstructed.view(batch_size_curr, *activation_shape)
+
+        # Prepare observations for the model
+        observations_prepared = einops.rearrange(observations, "b h w c -> b c h w")
+
+        # Compute original logits
+        with t.no_grad():
+            # Ensure model is in evaluation mode
+            model.eval()
+            # Run the model to get original logits
+            outputs_original = model(observations_prepared)
+            logits_original = outputs_original[0].logits if isinstance(outputs_original, tuple) else outputs_original.logits
+
+        # Compute logits with reconstructed activations
+        def replace_activation_hook(module, input, output):
+            return h_reconstructed_reshaped
+
+        hook_handle = module_at_layer.register_forward_hook(replace_activation_hook)
+        # Run the model to get reconstructed logits
+        outputs_reconstructed = model(observations_prepared)
+        logits_reconstructed = outputs_reconstructed[0].logits if isinstance(outputs_reconstructed, tuple) else outputs_reconstructed.logits
+        # Remove the hook
+        hook_handle.remove()
+
+        # Compute the difference in logits
+        logits_diff = F.mse_loss(logits_reconstructed, logits_original.detach(), reduction='mean')
+
+        # Add the logits difference to the total loss
+        total_loss = loss + logits_diff
+
+        # Backpropagate
+        total_loss.backward()
         optimizer.step()
 
         with t.no_grad():
             # Compute variance explained
-            numerator = t.sum((batch - h_reconstructed) ** 2, dim=1)
-            denominator = t.sum(batch ** 2, dim=1)
+            numerator = t.sum((activations - h_reconstructed) ** 2, dim=1)
+            denominator = t.sum(activations ** 2, dim=1)
             variance_explained = 1 - numerator / (denominator + 1e-8)
             variance_explained = variance_explained.mean().item()
             acts_mean = acts.mean().item()
@@ -354,13 +415,14 @@ def train_sae(
             progress_bar.set_postfix({
                 'Loss': loss.item(),
                 'Reconstruction': L_reconstruction.item(),
-                'Sparsity': L_sparsity.item()
+                'Sparsity': L_sparsity.item(),
+                'Logits Diff': logits_diff.item()
             })
             loss_history.append(loss.item())
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
-
+            logits_diff_history.append(logits_diff.item())
 
             import matplotlib.pyplot as plt
             import io
@@ -369,7 +431,7 @@ def train_sae(
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
 
             ax1.set_title('Original Activation')
-            ax1.plot(batch[0].cpu().numpy())
+            ax1.plot(activations[0].cpu().numpy())
 
             ax2.set_title('Reconstructed Activation')
             ax2.plot(h_reconstructed[0].detach().cpu().numpy())
@@ -378,8 +440,10 @@ def train_sae(
             wandb.log({
                 "step": step,
                 "loss": loss.item(),
+                "total_loss": total_loss.item(),
                 "reconstruction_loss": L_reconstruction.item(),
                 "sparsity_loss": L_sparsity.item(),
+                "logits_diff": logits_diff.item(),
                 "acts_mean": acts_mean,
                 "acts_min": acts_min,
                 "acts_max": acts_max,
@@ -402,6 +466,8 @@ def train_sae(
     wandb.finish()
     return loss_history, L_reconstruction_history, L_sparsity_history, variance_explained_history
 
+
+
 # Load your model
 def load_interpretable_model(model_path="../model_interpretable.pt"):
     import gym
@@ -420,8 +486,8 @@ def compute_and_save_global_stats(
     layer_number,
     layer_name,
     num_samples=10000,
-    batch_size=64,
-    num_envs=4,
+    batch_size=128,
+    num_envs=64,
     save_dir='global_stats'
 ):
     """
@@ -436,7 +502,7 @@ def compute_and_save_global_stats(
     total_samples = 0
     with tqdm(total=num_samples, desc=f'Computing global stats for {layer_name}') as pbar:
         while total_samples < num_samples:
-            activations = generate_batch_activations_parallel(
+            activations, _, _ = generate_batch_activations_parallel(
                 model, model_activations, layer_number, batch_size=batch_size, num_envs=num_envs
             )
             activation_samples.append(activations)
@@ -456,8 +522,8 @@ def compute_global_stats_for_all_layers(
     model,
     ordered_layer_names,
     num_samples_per_layer=10000,
-    batch_size=64,
-    num_envs=4,
+    batch_size=128,
+    num_envs=128,
     save_dir='global_stats'
 ):
     for layer_number, layer_name in ordered_layer_names.items():
@@ -482,7 +548,7 @@ def train_all_layers(
     steps_per_layer=1000,
     batch_size=64,
     lr=1e-3,
-    num_envs=4,
+    num_envs=128,
     episode_length=150,
     log_freq=10,
 ):
@@ -501,7 +567,7 @@ def train_all_layers(
         model_activations = ModelActivations(model, layer_paths=layer_paths)
 
         # Generate a sample activation to determine input dimension
-        sample_activations = generate_batch_activations_parallel(
+        sample_activations, _, _ = generate_batch_activations_parallel(
             model, model_activations, layer_number, batch_size=1
         )
         d_in = sample_activations.shape[-1]  # Input dimension for SAE
@@ -556,3 +622,5 @@ def train_all_layers(
 
         # Clear hooks to prevent accumulation
         model_activations.clear_hooks()
+
+

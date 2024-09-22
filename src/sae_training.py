@@ -1,4 +1,5 @@
 #%%
+
 import os
 import sys
 from dataclasses import dataclass
@@ -146,9 +147,10 @@ sae.train_all_layers(
     stats_dir='global_stats',
     wandb_project="SAE_training",
     steps_per_layer=1000,
-    batch_size=64,
+    batch_size=32,
     lr=1e-4,
-    num_envs=16,
+    num_envs=4,
     episode_length=150,
     log_freq=10,
 )
+
