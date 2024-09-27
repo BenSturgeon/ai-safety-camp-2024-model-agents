@@ -110,6 +110,7 @@ ordered_layer_names = {
 # )
 
 
+
 # %%
 def compute_global_stats_for_all_layers(
     model,
@@ -160,3 +161,5 @@ sae.train_all_layers(
     episode_length=150,
     log_freq=10,
 )
+
+# %%

@@ -1,10 +1,10 @@
 import torch.nn as nn
-import torch
+import torch as t
 import imageio
+from torch.nn import functional as F
 
 
 import gym
-import torch
 
 from collections import defaultdict
 
@@ -83,9 +83,9 @@ class ModelActivations:
         def hook(model, input, output):
             processed_output = []
             for item in output:
-                if isinstance(item, torch.Tensor):
+                if isinstance(item, t.Tensor):
                     processed_output.append(item.detach())
-                elif isinstance(item, torch.distributions.Categorical):
+                elif isinstance(item, t.distributions.Categorical):
                     processed_output.append(item.logits.detach())
                 else:
                     processed_output.append(item)
@@ -110,29 +110,38 @@ class ModelActivations:
     def run_with_cache(self, input, layer_paths):
         self.clear_hooks()  # Clear any existing hooks
         self.activations = {}  # Reset activations
-        for path in layer_paths:
-            self.register_hook_by_path(path, path.replace(".", "_"))
+        if isinstance(layer_paths, str):
+            print("in run with cache", layer_paths)
+            # Handle case where layer_paths is a single string
+            self.register_hook_by_path(layer_paths, layer_paths.replace(".", "_"))
+        elif isinstance(layer_paths, list):
+            # Handle case where layer_paths is a list
+            print("not in run with cache", layer_paths)
+
+            for path in layer_paths:
+                self.register_hook_by_path(path, path.replace(".", "_"))
+        else:
+            raise ValueError("layer_paths must be a string or a list of strings")
         output = self.model(input)
         return output, self.activations
 
 
-@torch.no_grad()
-def generate_action(model, observation, is_procgen_env=False):
-    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
-    model_output = model(observation)
-    logits = model_output[
-        0
-    ].logits  # discard the output of the critic in our actor critic network
-    probabilities = torch.softmax(logits, dim=-1)
-    action = torch.multinomial(probabilities, 1).item()
+def generate_action(model, obs, is_procgen_env=True):
+    with t.no_grad():
+        if len(obs.shape) == 3:
+            obs = np.expand_dims(obs, axis=0)
+        outputs = model(obs)
+    logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+    probabilities = F.softmax(logits, dim=-1)
+    actions = t.multinomial(probabilities, num_samples=1).squeeze(-1)
     if is_procgen_env:
-        return np.array([action])
-    return action
+        return actions.cpu().numpy()
+    return actions.cpu()
 
 
-# @torch.no_grad()
+# @t.no_grad()
 # def generate_action_with_steering(model, observation, steering_vector, is_procgen_env=True):
-#     observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+#     observation = t.tensor(observation, dtype=t.float32).unsqueeze(0)
 
 #     # Define the steering hook function
 #     def steering_hook(module, input, output):
@@ -153,8 +162,8 @@ def generate_action(model, observation, is_procgen_env=False):
 
 
 #     logits = model_output[0].logits  # discard the output of the critic in our actor critic network
-#     probabilities = torch.softmax(logits, dim=-1)
-#     action = torch.multinomial(probabilities, 1).item()
+#     probabilities = t.softmax(logits, dim=-1)
+#     action = t.multinomial(probabilities, 1).item()
 #     if is_procgen_env:
 #         return np.array([action])
 #     return action
@@ -435,7 +444,7 @@ def compute_activation_differences(activations1, activations2):
         print(difference.shape)
 
         # Check if there are any non-zero differences
-        has_non_zero = torch.any(difference != 0)
+        has_non_zero = t.any(difference != 0)
 
         if has_non_zero:
             print(f"Key: {key} has non-zero differences.")
@@ -609,10 +618,10 @@ def rgb_to_observation(rgb_image):
     if isinstance(rgb_image, np.ndarray):
         observation = rgb_image / 255.0
         observation = observation.astype(np.float32)
-    elif torch.is_tensor(rgb_image):
+    elif t.is_tensor(rgb_image):
         observation = rgb_image.float() / 255.0
     else:
-        raise TypeError("RGB image must be a numpy array or a PyTorch tensor.")
+        raise TypeError("RGB image must be a numpy array or a Pyt tensor.")
     return observation
 
 
@@ -624,11 +633,11 @@ def observation_to_rgb(observation):
     if isinstance(observation, np.ndarray):
         rgb_image = observation * 255
         rgb_image = rgb_image.astype(np.uint8)
-    elif torch.is_tensor(observation):
+    elif t.is_tensor(observation):
         rgb_image = observation * 255
         rgb_image = rgb_image.byte()
     else:
-        raise TypeError("Observation must be a numpy array or a PyTorch tensor.")
+        raise TypeError("Observation must be a numpy array or a Pyt tensor.")
     return rgb_image
 
 
@@ -681,17 +690,27 @@ def run_episode_and_save_as_gif(
     observations = []
     observation = env.reset()
     done = False
+    if isinstance(observation, np.ndarray) and observation.ndim > 3:
+        done = t.zeros(observation.shape[0], dtype=t.bool)
+    else:
+        done = False
     total_reward = 0
     frames = []
 
     # observation = colour_swap(observation)
     count = 0
-    while not done:
+    while not done.all():  # Check if all environments in the batch are done
         if save_gif:
             frames.append(env.render(mode="rgb_array"))
 
-        observation = np.squeeze(observation)
-        observation = np.transpose(observation, (1, 2, 0))
+        if observation.ndim == 4:  # If there's a batch dimension
+            observation = np.transpose(
+                observation, (0, 2, 3, 1)
+            )  # (batch, height, width, channels)
+        else:
+            observation = np.transpose(
+                observation, (1, 2, 0)
+            )  # (height, width, channels)
         converted_obs = observation_to_rgb(observation)
 
         action = generate_action(model, converted_obs, is_procgen_env=is_procgen_env)
@@ -856,9 +875,9 @@ class ModelActivations:
         def hook(model, input, output):
             processed_output = []
             for item in output:
-                if isinstance(item, torch.Tensor):
+                if isinstance(item, t.Tensor):
                     processed_output.append(item.detach())
-                elif isinstance(item, torch.distributions.Categorical):
+                elif isinstance(item, t.distributions.Categorical):
                     processed_output.append(item.logits.detach())
                 else:
                     processed_output.append(item)
@@ -885,13 +904,13 @@ class ModelActivations:
         self.activations = {}  # Reset activations
 
         # Handle edge case: input is not a tensor
-        if not isinstance(input, torch.Tensor):
-            input = torch.tensor(input, dtype=torch.float32)
+        if not isinstance(input, t.Tensor):
+            input = t.tensor(input, dtype=t.float32)
 
         # Check the shape of the input and reshape if necessary
-        if input.shape == torch.Size([1, 3, 64, 64]):
+        if input.shape == t.Size([1, 3, 64, 64]):
             input = input.squeeze(0)  # Remove the batch dimension
-        if input.shape == torch.Size([3, 64, 64]):
+        if input.shape == t.Size([3, 64, 64]):
             input = input.permute(1, 2, 0)  # Switch dimensions to (64, 64, 3)
 
         # Handle edge case: empty layer_paths
@@ -900,6 +919,9 @@ class ModelActivations:
             return output, self.activations
 
         # Register hooks for each layer path
+        if isinstance(layer_paths, str):
+            layer_paths = [layer_paths]
+
         for path in layer_paths:
             try:
                 self.register_hook_by_path(path, path.replace(".", "_"))
@@ -918,7 +940,7 @@ class ModelActivations:
         return output, self.activations
 
 
-@torch.no_grad()
+@t.no_grad()
 def generate_action_with_patching(
     model, observation, patched_vector, steering_layer, is_procgen_env=False
 ):
@@ -927,14 +949,14 @@ def generate_action_with_patching(
     xm = None
 
     if device is None:
-        if torch.cuda.is_available():
-            device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            device = torch.device("mps")
+        if t.cuda.is_available():
+            device = t.device("cuda")
+        elif t.backends.mps.is_available():
+            device = t.device("mps")
         else:
-            device = torch.device("cpu")
+            device = t.device("cpu")
 
-    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+    observation = t.tensor(observation, dtype=t.float32).unsqueeze(0)
 
     # Define the steering hook function
     def steering_hook(module, input, output):
@@ -956,8 +978,8 @@ def generate_action_with_patching(
     logits = model_output[
         0
     ].logits  # discard the output of the critic in our actor critic network
-    probabilities = torch.softmax(logits, dim=-1)
-    action = torch.multinomial(probabilities, 1).item()
+    probabilities = t.softmax(logits, dim=-1)
+    action = t.multinomial(probabilities, 1).item()
 
     # If using TPU, we need to explicitly synchronize the device
     if xm is not None:
@@ -968,7 +990,7 @@ def generate_action_with_patching(
     return action
 
 
-@torch.no_grad()
+@t.no_grad()
 def generate_action_with_steering(
     model,
     observation,
@@ -982,25 +1004,25 @@ def generate_action_with_steering(
     xm = None
 
     # try:
-    #     import torch_xla.core.xla_model as xm
+    #     import t_xla.core.xla_model as xm
     #     if xm.xrt_world_size() > 0:
     #         device = xm.xla_device()
     #         # print("Running on TPU")
     # except ImportError:
-    #     print("PyTorch XLA not available. Will use CPU/GPU if available.")
+    #     print("Pyt XLA not available. Will use CPU/GPU if available.")
 
     if device is None:
-        if torch.cuda.is_available():
-            device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            device = torch.device("mps")
+        if t.cuda.is_available():
+            device = t.device("cuda")
+        elif t.backends.mps.is_available():
+            device = t.device("mps")
         else:
-            device = torch.device("cpu")
+            device = t.device("cpu")
 
     # Move model to the appropriate device
     # model = model.to(device)
 
-    observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+    observation = t.tensor(observation, dtype=t.float32).unsqueeze(0)
     steering_vector = steering_vector
 
     # Define the steering hook function
@@ -1023,8 +1045,8 @@ def generate_action_with_steering(
     logits = model_output[
         0
     ].logits  # discard the output of the critic in our actor critic network
-    probabilities = torch.softmax(logits, dim=-1)
-    action = torch.multinomial(probabilities, 1).item()
+    probabilities = t.softmax(logits, dim=-1)
+    action = t.multinomial(probabilities, 1).item()
 
     # If using TPU, we need to explicitly synchronize the device
     if xm is not None:
@@ -1294,12 +1316,12 @@ def create_objective_vectors(model_activations, layer_paths, num_samples=16) -> 
 
         # Calculate the mean of activations for each layer
         for layer, activation in activations.items():
-            objective_vectors[objective][layer] = torch.stack(activation).mean(dim=0)
+            objective_vectors[objective][layer] = t.stack(activation).mean(dim=0)
 
     return objective_vectors
 
 
-@torch.no_grad()
+@t.no_grad()
 def batch_generate_action_with_cache(
     model, observations, model_activations, layer_paths, is_procgen_env=False
 ):

@@ -62,51 +62,46 @@ layer_types = {
 }
 
 
-# ModelActivations class modified for batch processing
-class ModelActivations:
-    def __init__(self, model, layer_paths):
-        self.activations = {}
-        self.model = model
-        self.hooks = []
-        self.layer_paths = layer_paths
-        self.register_hooks()
+# class ModelActivations:
+#     def __init__(self, model, layer_paths):
+#         self.activations = {}
+#         self.model = model
+#         self.hooks = []
+#         self.layer_paths = layer_paths
+#         self.register_hooks()
 
-    def clear_hooks(self):
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
+#     def clear_hooks(self):
+#         for hook in self.hooks:
+#             hook.remove()
+#         self.hooks = []
 
-    def get_activation(self, name):
-        def hook(model, input, output):
-            self.activations[name] = output.detach()
+#     def get_activation(self, name):
+#         def hook(model, input, output):
+#             self.activations[name] = output.detach()
 
-        return hook
+#         return hook
 
-    def register_hooks(self):
-        for path in self.layer_paths:
-            elements = path.split(".")
-            module = self.model
-            for element in elements:
-                if "[" in element and "]" in element:
-                    base, idx = element.split("[")
-                    idx = int(idx[:-1])
-                    module = getattr(module, base)[idx]
-                else:
-                    module = getattr(module, element)
-            hook = module.register_forward_hook(
-                self.get_activation(path.replace(".", "_"))
-            )
-            self.hooks.append(hook)
+#     def register_hooks(self):
+#         for path in self.layer_paths:
+#             elements = path.split(".")
+#             module = self.model
+#             for element in elements:
+#                 if "[" in element and "]" in element:
+#                     base, idx = element.split("[")
+#                     idx = int(idx[:-1])
+#                     module = getattr(module, base)[idx]
+#                 else:
+#                     module = getattr(module, element)
+#             hook = module.register_forward_hook(
+#                 self.get_activation(path.replace(".", "_"))
+#             )
+#             self.hooks.append(hook)
 
-    def run_with_cache(self, inputs):
-        self.activations = {}
-        # Check if inputs have the expected shape (batch_size, 3, 64, 64)
-        if inputs.shape[1:] != (3, 64, 64):
-            # If not, rearrange the inputs to the expected shape
-            inputs = einops.rearrange(inputs, "b h c w -> b w c h ").to(device)
-        inputs = inputs.to(next(self.model.parameters()).to(device))
-        outputs = self.model(inputs)
-        return outputs, self.activations
+#     def run_with_cache(self, inputs):
+#         self.activations = {}
+#         inputs = inputs.to(next(self.model.parameters()).device)
+#         outputs = self.model(inputs)
+#         return outputs, self.activations
 
 
 def jump_relu(x, jump_value=0.1):
@@ -199,31 +194,57 @@ def generate_batch_activations_parallel(
 
     activation_buffer = []
     obs_buffer = []
-    activation_shape = None  # To be set later
+    activation_shapes = None  # To be set later
 
     obs = venv.reset()
     dones = [False] * num_envs
     steps = 0
+    total_rewards = 0
+
+    # Identify terminated environments and calculate completion percentages
+    completed_zero = 0
+    completed_ten = 0
+    total_terminated = 0
 
     while len(activation_buffer) * num_envs < batch_size:
         # Convert observations to tensors and move to GPU
-        observations = t.tensor(obs, dtype=t.float32).to(
-            device
-        )  # Shape: [num_envs, height, width, channels]
+        observations = t.tensor(obs, dtype=t.float32).to(device)
+        observations = einops.rearrange(observations, "b h w c -> b c h w")
 
         # Run the model and capture activations
-        with t.no_grad():
-            outputs, activations = model_activations.run_with_cache(observations)
 
         # Extract activations from the specified layer for all environments
         layer_name = ordered_layer_names[layer_number]
+        with t.no_grad():
+            outputs, activations = model_activations.run_with_cache(
+                observations, layer_name
+            )
         layer_activation = activations[layer_name.replace(".", "_")]
 
-        if activation_shape is None:
-            activation_shape = layer_activation.shape[1:]  # Exclude batch dimension
+        # Handle tuple activations by flattening and concatenating
+        if isinstance(layer_activation, tuple):
+            flattened_activations = []
+            if activation_shapes is None:
+                activation_shapes = []
+            for activation in layer_activation:
+                # Store the shape for reconstruction
+                activation_shapes.append(
+                    activation.shape[1:]
+                )  # Exclude batch dimension
+                # Flatten activation
+                flattened = activation.view(activation.size(0), -1)
+                flattened_activations.append(flattened)
+            # Concatenate flattened activations along the feature dimension
+            batch_layer_activations = t.cat(flattened_activations, dim=1)
+        else:
+            if activation_shapes is None:
+                activation_shapes = [
+                    layer_activation.shape[1:]
+                ]  # Exclude batch dimension
+            batch_layer_activations = layer_activation.view(
+                layer_activation.size(0), -1
+            )
 
-        # Flatten activations and append to the buffer
-        batch_layer_activations = layer_activation.reshape(layer_activation.size(0), -1)
         activation_buffer.append(batch_layer_activations)
         obs_buffer.append(observations)
 
@@ -231,19 +252,34 @@ def generate_batch_activations_parallel(
         logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
         probabilities = t.softmax(logits, dim=-1)
         actions = t.multinomial(probabilities, num_samples=1).squeeze(1).cpu().numpy()
-
         # Step environments
         obs, rewards, dones_env, infos = venv.step(actions)
+        total_rewards += sum(rewards)  # Sum up the rewards from all environments
         dones = [d or (steps > episode_length) for d in dones_env]
-        steps += 1
 
+        for env_idx, done in enumerate(dones_env):
+            if done:
+                total_terminated += 1
+                if rewards[env_idx] == 0:
+                    completed_zero += 1
+                elif rewards[env_idx] == 10:
+                    completed_ten += 1
+
+    if total_terminated > 0:
+        percent_zero = (completed_zero / total_terminated) * 100
+        percent_ten = (completed_ten / total_terminated) * 100
+        print(
+            f"Completed with 0: {percent_zero:.2f}%, Completed with 10: {percent_ten:.2f}%"
+        )
+
+        steps += 1
     venv.close()
 
     # Concatenate buffers
     activations_tensor = t.cat(activation_buffer, dim=0)[:batch_size]
     observations_tensor = t.cat(obs_buffer, dim=0)[:batch_size]
 
-    return activations_tensor, observations_tensor, activation_shape
+    return activations_tensor, observations_tensor, activation_shapes
 
 
 # Helper function to find the latest checkpoint
@@ -302,16 +338,16 @@ def train_sae(
     stats_dir="global_stats",
     wandb_project="SAE_training",
 ):
-    # Load global statistics
-    stats_path = os.path.join(stats_dir, f"layer_{layer_number}_{layer_name}_stats.pt")
-    if not os.path.exists(stats_path):
-        raise FileNotFoundError(
-            f"Global stats file not found for layer {layer_number}: {stats_path}"
-        )
-    stats = t.load(stats_path, map_location=device)
-    global_mean = stats["mean"].to(device)
-    global_std = stats["std"].to(device)
-    print(global_mean, global_std)
+    # # Load global statistics
+    # stats_path = os.path.join(stats_dir, f"layer_{layer_number}_{layer_name}_stats.pt")
+    # if not os.path.exists(stats_path):
+    #     raise FileNotFoundError(
+    #         f"Global stats file not found for layer {layer_number}: {stats_path}"
+    #     )
+    # stats = t.load(stats_path, map_location=device)
+    # global_mean = stats["mean"].to(device)
+    # global_std = stats["std"].to(device)
+    # print(global_mean, global_std)
 
     # Unique identifier for each layer to manage separate checkpoints and wandb runs
     layer_identifier = f"layer_{layer_number}_{layer_name}"
@@ -401,16 +437,14 @@ def train_sae(
                 )
             )
             # Normalize using global statistics
-            batch_normalized = (activations - global_mean) / global_std
+            # batch_normalized = (activations - global_mean) / global_std
 
         except Exception as e:
             print(f"Error during activation generation: {e}")
             continue  # Skip this iteration and proceed
 
         optimizer.zero_grad()
-        loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(
-            batch_normalized
-        )
+        loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(activations)
         # nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
 
         # Reshape h_reconstructed back to original activation shape
@@ -579,7 +613,7 @@ def compute_and_save_global_stats(
     # Define layer paths for activation capture
     layer_paths = [layer_name]
     # Initialize ModelActivations
-    model_activations = ModelActivations(model, layer_paths=layer_paths)
+    model_activations = helpers.ModelActivations(model)
     activation_samples = []
     total_samples = 0
     with tqdm(
@@ -656,7 +690,7 @@ def train_all_layers(
         layer_paths = [layer_name]  # Capture only the target layer
 
         # Initialize ModelActivations
-        model_activations = ModelActivations(model, layer_paths=layer_paths)
+        model_activations = helpers.ModelActivations(model)
 
         # Generate a sample activation to determine input dimension
         sample_activations, _, _ = generate_batch_activations_parallel(

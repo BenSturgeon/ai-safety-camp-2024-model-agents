@@ -1,11 +1,6 @@
 # %%
-from src.utils import helpers, heist
-
-# %%
 import sys
-
-# Append parent directory to import modules
-sys.path.append("../")  # Adjust the path if necessary to import your modules
+from src.utils import helpers, heist
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
@@ -105,7 +100,7 @@ class ModelActivations:
 
     def run_with_cache(self, inputs):
         self.activations = {}
-        inputs = einops.rearrange(inputs, "b h c w -> b w c h ")
+        inputs = einops.rearrange(inputs, "b h c w -> b c h w ")
         inputs = inputs.to(next(self.model.parameters()).device)
         outputs, value = self.model(inputs)
         return outputs, self.activations
@@ -206,7 +201,18 @@ def load_sae_model(layer_number, sae_model_path):
     d_in = channels * height * width
 
     # Load the checkpoint
-    checkpoint = t.load(sae_model_path, map_location=device)
+    try:
+        checkpoint = t.load(sae_model_path, map_location=device)
+    except FileNotFoundError:
+        print(f"Error: SAE model file not found at {sae_model_path}")
+        return None
+    except Exception as e:
+        print(f"Error loading SAE model: {str(e)}")
+        return None
+
+    if checkpoint is None:
+        print("Error: Failed to load SAE model checkpoint")
+        return None
     state_dict = checkpoint["model_state_dict"]
 
     # Infer d_in and d_hidden from the shapes of W_enc
