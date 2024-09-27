@@ -1,4 +1,5 @@
 # sae.py
+# %%
 
 import os
 import sys
@@ -18,11 +19,10 @@ import math
 
 # Import your heist environment module
 sys.path.append('../')  # Adjust the path if necessary to import your modules
-import notebooks.heist as heist
+from src.utils import helpers, heist
 
 # Set device
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
-
 # Ordered layer names
 ordered_layer_names = {
     1: 'conv1a',
@@ -624,3 +624,5 @@ def train_all_layers(
         model_activations.clear_hooks()
 
 
+
+# %%

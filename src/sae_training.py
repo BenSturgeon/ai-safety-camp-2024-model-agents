@@ -1,4 +1,4 @@
-#%%
+# %%
 
 import os
 import sys
@@ -17,11 +17,13 @@ import sae
 
 
 device = t.device(
-    "mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu"
+    "mps"
+    if t.backends.mps.is_available()
+    else "cuda" if t.cuda.is_available() else "cpu"
 )
-sys.path.append('../')  # Adjust the path if necessary to import your modules
+sys.path.append("../")  # Adjust the path if necessary to import your modules
 
-import notebooks.heist as heist  # Import your heist environment module
+from src.utils import helpers, heist
 
 # Set device
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -29,44 +31,46 @@ device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
 # Ordered layer names
 ordered_layer_names = {
-    1: 'conv1a',
-    2: 'pool1',
-    3: 'conv2a',
-    4: 'conv2b',
-    5: 'pool2',
-    6: 'conv3a',
-    7: 'pool3',
-    8: 'conv4a',
-    9: 'pool4',
-    10: 'fc1',
-    11: 'fc2',
-    12: 'fc3',
-    13: 'value_fc',
-    14: 'dropout_conv',
-    15: 'dropout_fc'
+    1: "conv1a",
+    2: "pool1",
+    3: "conv2a",
+    4: "conv2b",
+    5: "pool2",
+    6: "conv3a",
+    7: "pool3",
+    8: "conv4a",
+    9: "pool4",
+    10: "fc1",
+    11: "fc2",
+    12: "fc3",
+    13: "value_fc",
+    14: "dropout_conv",
+    15: "dropout_fc",
 }
 
 # Define layer types
 layer_types = {
-    'conv1a': 'conv',
-    'pool1': 'pool',
-    'conv2a': 'conv',
-    'conv2b': 'conv',
-    'pool2': 'pool',
-    'conv3a': 'conv',
-    'pool3': 'pool',
-    'conv4a': 'conv',
-    'pool4': 'pool',
-    'fc1': 'fc',
-    'fc2': 'fc',
-    'fc3': 'fc',
-    'value_fc': 'fc',
-    'dropout_conv': 'dropout_conv',
-    'dropout_fc': 'dropout_fc'
+    "conv1a": "conv",
+    "pool1": "pool",
+    "conv2a": "conv",
+    "conv2b": "conv",
+    "pool2": "pool",
+    "conv3a": "conv",
+    "pool3": "pool",
+    "conv4a": "conv",
+    "pool4": "pool",
+    "fc1": "fc",
+    "fc2": "fc",
+    "fc3": "fc",
+    "value_fc": "fc",
+    "dropout_conv": "dropout_conv",
+    "dropout_fc": "dropout_fc",
 }
+
 
 def constant_lr(*_):
     return 1.0
+
 
 # Load the model
 model = sae.load_interpretable_model()
@@ -79,7 +83,7 @@ ordered_layer_names = {
     # 3: 'conv2a',
     # 4: 'conv2b',
     # 5: 'pool2',
-    6: 'conv3a',
+    6: "conv3a",
     # 7: 'pool3',
     # 8: 'conv4a',
     # 9: 'pool4',
@@ -90,7 +94,7 @@ ordered_layer_names = {
     # 14: 'dropout_conv',
     # 15: 'dropout_fc'
 }
-    # Execute training for all layers
+# Execute training for all layers
 # sae.train_all_layers(
 #     model=model,
 #     ordered_layer_names=ordered_layer_names,
@@ -105,6 +109,7 @@ ordered_layer_names = {
 #     log_freq=10,
 # )
 
+
 # %%
 def compute_global_stats_for_all_layers(
     model,
@@ -112,7 +117,7 @@ def compute_global_stats_for_all_layers(
     num_samples_per_layer=10000,
     batch_size=64,
     num_envs=8,
-    save_dir='global_stats'
+    save_dir="global_stats",
 ):
     for layer_number, layer_name in ordered_layer_names.items():
         sae.compute_and_save_global_stats(
@@ -122,8 +127,10 @@ def compute_global_stats_for_all_layers(
             num_samples=num_samples_per_layer,
             batch_size=batch_size,
             num_envs=num_envs,
-            save_dir=save_dir
+            save_dir=save_dir,
         )
+
+
 # Load the model
 model = sae.load_interpretable_model()
 model.to(device)
@@ -136,15 +143,15 @@ compute_global_stats_for_all_layers(
     num_samples_per_layer=10000,
     batch_size=64,
     num_envs=8,
-    save_dir='global_stats'
+    save_dir="global_stats",
 )
 # %%
 sae.train_all_layers(
     model,
     ordered_layer_names,
     layer_types,
-    checkpoint_dir='checkpoints',
-    stats_dir='global_stats',
+    checkpoint_dir="checkpoints",
+    stats_dir="global_stats",
     wandb_project="SAE_training",
     steps_per_layer=1000,
     batch_size=32,
@@ -153,4 +160,3 @@ sae.train_all_layers(
     episode_length=150,
     log_freq=10,
 )
-
