@@ -104,6 +104,38 @@ layer_types = {
 #         return outputs, self.activations
 
 
+class ReplayBuffer:
+    def __init__(self, capacity, activation_shape, observation_shape, device):
+        self.capacity = capacity
+        self.activation_shape = activation_shape  # Store the shape instead of dimension
+        self.observation_shape = observation_shape
+        self.device = device
+        self.activations = t.empty((capacity, *activation_shape), device=device)
+        self.observations = t.empty((capacity, *observation_shape), device=device)
+        self.size = 0
+        self.position = 0  # For circular buffer behavior
+
+    def add(self, activation, observation):
+        # activation: [*activation_shape]
+        # observation: [*observation_shape]
+        self.activations[self.position] = activation.to(self.device)
+        self.observations[self.position] = observation.to(self.device)
+        self.position = (self.position + 1) % self.capacity
+        if self.size < self.capacity:
+            self.size += 1
+
+    def sample(self, batch_size):
+        if self.size < batch_size:
+            raise ValueError("Not enough samples in the replay buffer to sample.")
+        indices = random.sample(range(self.size), batch_size)
+        sampled_activations = self.activations[indices]
+        sampled_observations = self.observations[indices]
+        return sampled_activations, sampled_observations
+
+    def is_full(self):
+        return self.size >= self.capacity
+
+
 def jump_relu(x, jump_value=0.1):
     return t.where(x > 0, x + jump_value, t.zeros_like(x))
 
@@ -175,6 +207,106 @@ class SAE(nn.Module):
         return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
 
 
+# New function to collect activations over full episodes and store them directly into the replay buffer
+def collect_activations_into_replay_buffer(
+    model,
+    model_activations,
+    layer_number,
+    replay_buffer,
+    num_envs=8,
+    episode_length=150,
+):
+    """
+    Run multiple environments in parallel, collect activations over full episodes,
+    and store them into the replay buffer.
+    """
+    # Create vectorized environments
+    venv = heist.create_venv(
+        num=num_envs,
+        num_levels=0,
+        start_level=random.randint(1, 100000),
+        # Add other environment parameters as needed
+    )
+
+    obs = venv.reset()
+    steps = np.zeros(num_envs, dtype=int)  # Keep track of steps per environment
+    episode_counts = np.zeros(num_envs, dtype=int)
+    max_episodes_per_env = (
+        1  # Adjust as needed to control the number of episodes per env
+    )
+
+    # Initialize lists to store activations and observations per environment
+    activation_lists = [[] for _ in range(num_envs)]
+    observation_lists = [[] for _ in range(num_envs)]
+
+    # Run the environments until the replay buffer is full
+    while not replay_buffer.is_full():
+        # Convert observations to tensors and move to GPU
+        observations = t.tensor(obs, dtype=t.float32).to(device)
+        observations = einops.rearrange(observations, "b h w c -> b c h w")
+
+        # Run the model and capture activations
+        layer_name = ordered_layer_names[layer_number]
+        with t.no_grad():
+            outputs, activations = model_activations.run_with_cache(
+                observations, layer_name
+            )
+        layer_activation = activations[layer_name.replace(".", "_")]
+
+        # Store activations and observations per environment
+        if isinstance(layer_activation, tuple):
+            for i in range(num_envs):
+                # Get the activation for environment i
+                activation_i = layer_activation[i]
+                # Store activation without flattening
+                activation_lists[i].append(activation_i.cpu())
+                observation_lists[i].append(observations[i].cpu())
+        else:
+            for i in range(num_envs):
+                activation_lists[i].append(layer_activation[i].cpu())
+                observation_lists[i].append(observations[i].cpu())
+
+        # Get actions from the model outputs
+        logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+        probabilities = t.softmax(logits, dim=-1)
+        actions = t.multinomial(probabilities, num_samples=1).squeeze(1).cpu().numpy()
+
+        # Step environments
+        obs, rewards, dones_env, infos = venv.step(actions)
+        steps += 1
+
+        # Handle done environments
+        for i, done in enumerate(dones_env):
+            if done or steps[i] >= episode_length:
+                # Collect the activations and observations for this environment
+                activations_tensor = t.stack(activation_lists[i], dim=0)
+                observations_tensor = t.stack(observation_lists[i], dim=0)
+                # Add each time step to the replay buffer
+                for t_step in range(activations_tensor.size(0)):
+                    replay_buffer.add(
+                        activations_tensor[t_step],  # Single activation
+                        observations_tensor[t_step],  # Corresponding observation
+                    )
+                # Reset lists
+                activation_lists[i] = []
+                observation_lists[i] = []
+                # Reset step counter
+                steps[i] = 0
+                episode_counts[i] += 1
+
+                # Optionally, stop collecting from this environment if max episodes reached
+                if episode_counts[i] >= max_episodes_per_env:
+                    # You can remove this environment from further processing
+                    # For simplicity, we'll just continue resetting
+                    pass
+
+        # If all environments have reached the maximum number of episodes, exit loop
+        if np.all(episode_counts >= max_episodes_per_env):
+            break
+
+    venv.close()
+
+
 # Function to generate batch activations in parallel
 def generate_batch_activations_parallel(
     model,
@@ -197,14 +329,7 @@ def generate_batch_activations_parallel(
     activation_shapes = None  # To be set later
 
     obs = venv.reset()
-    dones = [False] * num_envs
     steps = 0
-    total_rewards = 0
-
-    # Identify terminated environments and calculate completion percentages
-    completed_zero = 0
-    completed_ten = 0
-    total_terminated = 0
 
     while len(activation_buffer) * num_envs < batch_size:
         # Convert observations to tensors and move to GPU
@@ -212,8 +337,6 @@ def generate_batch_activations_parallel(
         observations = einops.rearrange(observations, "b h w c -> b c h w")
 
         # Run the model and capture activations
-
-        # Extract activations from the specified layer for all environments
         layer_name = ordered_layer_names[layer_number]
         with t.no_grad():
             outputs, activations = model_activations.run_with_cache(
@@ -221,62 +344,38 @@ def generate_batch_activations_parallel(
             )
         layer_activation = activations[layer_name.replace(".", "_")]
 
-        # Handle tuple activations by flattening and concatenating
-        if isinstance(layer_activation, tuple):
-            flattened_activations = []
-            if activation_shapes is None:
-                activation_shapes = []
-            for activation in layer_activation:
-                # Store the shape for reconstruction
-                activation_shapes.append(
-                    activation.shape[1:]
-                )  # Exclude batch dimension
-                # Flatten activation
-                flattened = activation.view(activation.size(0), -1)
-                flattened_activations.append(flattened)
-            # Concatenate flattened activations along the feature dimension
-            batch_layer_activations = t.cat(flattened_activations, dim=1)
-        else:
-            if activation_shapes is None:
-                activation_shapes = [
-                    layer_activation.shape[1:]
-                ]  # Exclude batch dimension
-            batch_layer_activations = layer_activation.view(
-                layer_activation.size(0), -1
-            )
+        # Handle activation shapes
+        # if activation_shapes is None:
+        #     activation_shapes = layer_activation[].shape[1:]  # Exclude batch dimension
 
-        activation_buffer.append(batch_layer_activations)
-        obs_buffer.append(observations)
+        activation_buffer.append(layer_activation.cpu())
+        obs_buffer.append(observations.cpu())
 
         # Get actions from the model outputs
         logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
         probabilities = t.softmax(logits, dim=-1)
         actions = t.multinomial(probabilities, num_samples=1).squeeze(1).cpu().numpy()
+
         # Step environments
         obs, rewards, dones_env, infos = venv.step(actions)
-        total_rewards += sum(rewards)  # Sum up the rewards from all environments
-        dones = [d or (steps > episode_length) for d in dones_env]
-
-        for env_idx, done in enumerate(dones_env):
-            if done:
-                total_terminated += 1
-                if rewards[env_idx] == 0:
-                    completed_zero += 1
-                elif rewards[env_idx] == 10:
-                    completed_ten += 1
-
-    if total_terminated > 0:
-        percent_zero = (completed_zero / total_terminated) * 100
-        percent_ten = (completed_ten / total_terminated) * 100
-        print(
-            f"Completed with 0: {percent_zero:.2f}%, Completed with 10: {percent_ten:.2f}%"
-        )
-
         steps += 1
+
+        # Safety check to prevent infinite loops
+        if steps > episode_length:
+            break
+
     venv.close()
 
     # Concatenate buffers
-    activations_tensor = t.cat(activation_buffer, dim=0)[:batch_size]
+    activations_tensor = t.cat(activation_buffer, dim=0)
+    if activations_tensor.size(0) >= batch_size:
+        activations_tensor = activations_tensor[:batch_size]
+    else:
+        print(
+            f"Warning: Collected only {activations_tensor.size(0)} activations, expected {batch_size}."
+        )
+
+    # Similarly handle observations if needed
     observations_tensor = t.cat(obs_buffer, dim=0)[:batch_size]
 
     return activations_tensor, observations_tensor, activation_shapes
@@ -322,6 +421,19 @@ def get_layer_hyperparameters(layer_name, layer_types):
         }
 
 
+def get_module_by_path(model, layer_path):
+    elements = layer_path.split(".")
+    module = model
+    for element in elements:
+        if "[" in element and "]" in element:
+            base, idx = element.split("[")
+            idx = int(idx[:-1])
+            module = getattr(module, base)[idx]
+        else:
+            module = getattr(module, element)
+    return module
+
+
 def train_sae(
     sae,
     model,
@@ -331,24 +443,13 @@ def train_sae(
     batch_size=128,
     steps=200,
     lr=1e-3,
-    num_envs=64,
+    num_envs=8,
     episode_length=150,
     log_freq=10,
     checkpoint_dir="checkpoints",
     stats_dir="global_stats",
     wandb_project="SAE_training",
 ):
-    # # Load global statistics
-    # stats_path = os.path.join(stats_dir, f"layer_{layer_number}_{layer_name}_stats.pt")
-    # if not os.path.exists(stats_path):
-    #     raise FileNotFoundError(
-    #         f"Global stats file not found for layer {layer_number}: {stats_path}"
-    #     )
-    # stats = t.load(stats_path, map_location=device)
-    # global_mean = stats["mean"].to(device)
-    # global_std = stats["std"].to(device)
-    # print(global_mean, global_std)
-
     # Unique identifier for each layer to manage separate checkpoints and wandb runs
     layer_identifier = f"layer_{layer_number}_{layer_name}"
 
@@ -401,47 +502,74 @@ def train_sae(
         start_step = 0
 
     # Get the module at the specified layer
-    def get_module_by_path(model, layer_path):
-        elements = layer_path.split(".")
-        module = model
-        for element in elements:
-            if "[" in element and "]" in element:
-                base, idx = element.split("[")
-                idx = int(idx[:-1])
-                module = getattr(module, base)[idx]
-            else:
-                module = getattr(module, element)
-        return module
-
     module_at_layer = get_module_by_path(model, layer_name)
+
+    # Generate a sample activation to determine input dimension and activation shapes
+    sample_activations, sample_observations, activation_shapes = (
+        generate_batch_activations_parallel(
+            model,
+            model_activations,
+            layer_number,
+            batch_size=batch_size,
+            num_envs=num_envs,
+            episode_length=episode_length,
+        )
+    )
+    d_in = sample_activations.view(sample_activations.size(0), -1).shape[
+        -1
+    ]  # Input dimension for SAE
+    activation_shape = sample_activations.shape[1:]  # Shape of activations
+    observation_shape = sample_observations.shape[1:]  # Shape of observations
+
+    # Initialize replay buffer
+    buffer_capacity = batch_size * 50  # Adjust as needed
+    replay_buffer = ReplayBuffer(
+        capacity=buffer_capacity,
+        activation_shape=activation_shape,
+        observation_shape=observation_shape,
+        device=device,
+    )
+
+    # Refill the replay buffer
+    collect_activations_into_replay_buffer(
+        model,
+        model_activations,
+        layer_number,
+        replay_buffer,
+        num_envs=num_envs,
+        episode_length=episode_length,
+    )
 
     progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
     variance_explained_history = []
-    logits_diff_history = []
 
     model.eval()
     for step in progress_bar:
-        try:
-            # Generate batch activations and observations (already on GPU)
-            activations, observations, activation_shape = (
-                generate_batch_activations_parallel(
-                    model,
-                    model_activations,
-                    layer_number,
-                    batch_size=batch_size,
-                    num_envs=num_envs,
-                    episode_length=episode_length,
-                )
+        # Refill the replay buffer if needed
+        if step % 50 == 0:
+            # Refill the replay buffer
+            collect_activations_into_replay_buffer(
+                model,
+                model_activations,
+                layer_number,
+                replay_buffer,
+                num_envs=num_envs,
+                episode_length=episode_length,
             )
-            # Normalize using global statistics
-            # batch_normalized = (activations - global_mean) / global_std
 
+        # Sample from the replay buffer
+        try:
+            activations_unflattened, observations = replay_buffer.sample(batch_size)
         except Exception as e:
-            print(f"Error during activation generation: {e}")
+            print(f"Error during activation sampling: {e}")
             continue  # Skip this iteration and proceed
+
+        # Flatten activations before feeding them into the SAE
+        activations = activations_unflattened.view(batch_size, -1).to(device)
+        observations = observations.to(device)
 
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(activations)
@@ -495,8 +623,8 @@ def train_sae(
         total_loss.backward()
         optimizer.step()
 
+        # Compute variance explained
         with t.no_grad():
-            # Compute variance explained
             numerator = t.sum((activations - h_reconstructed) ** 2, dim=1)
             denominator = t.sum(activations**2, dim=1)
             variance_explained = 1 - numerator / (denominator + 1e-8)
@@ -504,40 +632,27 @@ def train_sae(
             acts_mean = acts.mean().item()
             acts_min = acts.min().item()
             acts_max = acts.max().item()
+
         if step % log_freq == 0 or step == steps - 1:
             progress_bar.set_postfix(
                 {
                     "Loss": loss.item(),
                     "Reconstruction": L_reconstruction.item(),
                     "Sparsity": L_sparsity.item(),
-                    "Logits Diff": logits_diff.item(),
+                    "Variance Explained": variance_explained,
+                    "Logits diff": logits_diff,
                 }
             )
             loss_history.append(loss.item())
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
-            logits_diff_history.append(logits_diff.item())
-
-            import matplotlib.pyplot as plt
-            import io
-            from PIL import Image
-
-            # Create a figure for activation comparison
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-
-            ax1.set_title("Original Activation")
-            ax1.plot(activations[0].cpu().numpy())
-
-            ax2.set_title("Reconstructed Activation")
-            ax2.plot(h_reconstructed[0].detach().cpu().numpy())
 
             # Log metrics to wandb
             wandb.log(
                 {
                     "step": step,
                     "loss": loss.item(),
-                    "total_loss": total_loss.item(),
                     "reconstruction_loss": L_reconstruction.item(),
                     "sparsity_loss": L_sparsity.item(),
                     "logits_diff": logits_diff.item(),
@@ -545,14 +660,12 @@ def train_sae(
                     "acts_min": acts_min,
                     "acts_max": acts_max,
                     "variance_explained": variance_explained,
-                    "activation_comparison": wandb.Image(fig),
                 },
                 step=step,
             )
 
-            plt.close(fig)
         # Save checkpoint every 100 steps
-        if (step + 1) % 100 == 0 or step == steps - 1:
+        if (step + 1) % 5000 == 0 or step == steps - 1:
             checkpoint_path = os.path.join(
                 layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt"
             )
@@ -565,7 +678,6 @@ def train_sae(
                 },
                 checkpoint_path,
             )
-            wandb.save(checkpoint_path)  # Save checkpoint to wandb
 
     wandb.finish()
     return (
@@ -691,13 +803,27 @@ def train_all_layers(
 
         # Initialize ModelActivations
         model_activations = helpers.ModelActivations(model)
-
+        model.eval()
         # Generate a sample activation to determine input dimension
         sample_activations, _, _ = generate_batch_activations_parallel(
-            model, model_activations, layer_number, batch_size=1
+            model,
+            model_activations,
+            layer_number,
+            batch_size=batch_size,
+            num_envs=num_envs,
+            episode_length=episode_length,
         )
-        d_in = sample_activations.shape[-1]  # Input dimension for SAE
+        print("initial size:", sample_activations.shape[-1])
 
+        print(f"sample_activations shape before flattening: {sample_activations.shape}")
+        flattened_sample_activations = sample_activations.view(
+            sample_activations.size(0), -1
+        )
+        print(
+            f"flattened_sample_activations shape: {flattened_sample_activations.shape}"
+        )
+        d_in = flattened_sample_activations.shape[1]  # Correct input dimension for SAE
+        print(f"d_in: {d_in}")
         # Configure SAE
         sae_cfg = SAEConfig(
             d_in=d_in,
