@@ -137,7 +137,9 @@ class ReplayBuffer:
 
 
 def jump_relu(x, jump_value=0.1):
-    return t.where(x > 0, x + jump_value, t.zeros_like(x))
+    out = t.where(x > 0, x + jump_value, t.zeros_like(x))
+    # assert out.shape == x.shape, "Jump ReLU not doing the thing we want"
+    return out
 
 
 def topk_activation(x, k):
@@ -202,7 +204,7 @@ class SAE(nn.Module):
         # Loss components
         L_reconstruction = F.mse_loss(h_reconstructed, h, reduction="mean")
         L_sparsity = acts.abs().mean()
-        loss = L_reconstruction + self.cfg.l1_coeff * L_sparsity
+        loss = self.cfg.l1_coeff * L_sparsity
 
         return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
 
@@ -405,8 +407,8 @@ def get_layer_hyperparameters(layer_name, layer_types):
     layer_type = layer_types.get(layer_name, "other")
     if layer_type == "conv":
         return {
-            "d_hidden": 512,  # Example value for conv layers
-            "l1_coeff": 0.0001,  # Example value for conv layers
+            "d_hidden": 4096,  # Example value for conv layers
+            "l1_coeff": 0.000001,  # Example value for conv layers
         }
     elif layer_type == "fc":
         return {
@@ -547,6 +549,7 @@ def train_sae(
     variance_explained_history = []
 
     model.eval()
+    active_logits_histogram = None
     for step in progress_bar:
         # Refill the replay buffer if needed
         if step % 50 == 0:
@@ -577,6 +580,7 @@ def train_sae(
 
         # Reshape h_reconstructed back to original activation shape
         batch_size_curr = h_reconstructed.size(0)
+
         h_reconstructed_reshaped = h_reconstructed.view(
             batch_size_curr, *activation_shape
         )
@@ -612,11 +616,32 @@ def train_sae(
         hook_handle.remove()
 
         # Compute the difference in logits
-        logits_diff = F.mse_loss(
-            logits_reconstructed, logits_original.detach(), reduction="mean"
+        # Select only the relevant indices
+        # relevant_indices = [0,1, 2,3, 5, 6, 8]
+
+        # # Extract relevant logits
+        # logits_reconstructed_relevant = logits_reconstructed[:, relevant_indices]
+        # logits_original_relevant = logits_original.detach()[:, relevant_indices]
+
+        # Calculate KL divergence only for relevant indices
+        logits_diff = F.kl_div(
+            F.log_softmax(logits_reconstructed, dim=-1),
+            F.log_softmax(logits_original, dim=-1),
+            reduction="batchmean",
+            log_target=True,
         )
 
-        # Add the logits difference to the total loss
+        # Update the histogram of active logits
+        if active_logits_histogram is None:
+            active_logits_histogram = t.zeros(
+                logits_original.size(-1), dtype=t.int64, device=device
+            )
+        # Count occurrences of each logit index
+        active_indices = t.argmax(logits_original, dim=-1)
+        for index in active_indices:
+            active_logits_histogram[index] += 1
+
+        # Add the KL divergence to the total loss
         total_loss = loss + logits_diff
 
         # Backpropagate
@@ -665,7 +690,7 @@ def train_sae(
             )
 
         # Save checkpoint every 100 steps
-        if (step + 1) % 5000 == 0 or step == steps - 1:
+        if (step + 1) % 10000 == 0 or step == steps - 1:
             checkpoint_path = os.path.join(
                 layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt"
             )

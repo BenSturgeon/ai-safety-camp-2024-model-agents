@@ -398,13 +398,26 @@ def replace_layer_with_sae(model, sae, layer_number):
 
     # Define the hook function
     def hook_fn(module, input, output):
-        # Flatten output using reshape
+
+        print(input[0].shape)
         # h = layer_activation.view(1, -1).to(device)
-        h = output.reshape(output.size(0), -1).to(device)
+
+        h = input[0].flatten()
+        print(h.shape)
         # Pass through SAE
+        return None
         _, _, _, acts, h_reconstructed = sae(h)
+
         # Reshape h_reconstructed back to original shape using reshape_as
         h_reconstructed = h_reconstructed.reshape_as(output)
+
+        print("Input:", input)
+        print("Reconstructed:", h_reconstructed)
+        print("Original output:", output)
+        print(output.shape, h_reconstructed.shape)
+
+        print("Output diff", output - h_reconstructed)
+
         return h_reconstructed
 
     # Register the forward hook
@@ -412,7 +425,7 @@ def replace_layer_with_sae(model, sae, layer_number):
     return handle  # Return the handle to remove the hook later
 
 
-sae_model_path = "../src/checkpoints/layer_6_conv3a/sae_checkpoint_step_40000.pt"  # Path to your saved SAE model
+sae_model_path = "../src/checkpoints/layer_6_conv3a/sae_checkpoint_step_100000.pt"  # Path to your saved SAE model
 
 
 # # Assuming you have trained the SAE for the desired layer
@@ -489,14 +502,16 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
     # Run episodes without SAE
     model.eval()
-    rewards_without_sae = run_episodes(model, num_episodes, save_gif=True, with_sae=False)
+    rewards_without_sae = run_episodes(
+        model, num_episodes, save_gif=False, with_sae=False
+    )
 
     # Register the hook
     handle = replace_layer_with_sae(model, sae, layer_number)
 
     # Run episodes with SAE
     model.eval()
-    rewards_with_sae = run_episodes(model, num_episodes, save_gif=True, with_sae=True)
+    rewards_with_sae = run_episodes(model, num_episodes, save_gif=False, with_sae=True)
 
     # Remove the hook
     handle.remove()
@@ -512,6 +527,8 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
 
 model = load_interpretable_model().to(device)
-evaluate_model_performance(model, sae, layer_number, 4)
+evaluate_model_performance(model, sae, layer_number, 10)
+
+# %%
 
 # %%
