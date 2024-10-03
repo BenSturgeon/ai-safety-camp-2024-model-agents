@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import sae
 from src.utils import helpers, heist
 
+# from src.perform_sae_analysis import measure_logit_difference, collect_strong_activations
 
 # Set device
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -60,6 +61,132 @@ layer_types = {
     "dropout_conv": "dropout_conv",
     "dropout_fc": "dropout_fc",
 }
+
+
+def measure_logit_difference(model, sae, layer_number, num_samples=100):
+    # Generate observations
+    observations = []
+    env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+    obs = env.reset()
+    for _ in range(num_samples):
+        observations.append(obs[0].copy())
+        action = env.action_space.sample()
+        obs, reward, done, info = env.step(np.array([action]))
+        if done[0]:
+            obs = env.reset()
+
+    # Convert observations to tensor
+    obs_tensor = t.tensor(np.array(observations), dtype=t.float32)
+    print(obs_tensor.shape)
+    obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
+    print(obs_tensor.shape)
+
+    # Get logits without SAE
+    with t.no_grad():
+        outputs = model(obs_tensor)
+        logits_without_sae = (
+            outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+        )
+        logits_without_sae = logits_without_sae.cpu().numpy()
+
+    # Register the hook to replace the layer with SAE outputs
+    handle = replace_layer_with_sae(model, sae, layer_number)
+
+    # Get logits with SAE
+    with t.no_grad():
+        outputs = model(obs_tensor)
+        logits_with_sae = (
+            outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+        )
+        logits_with_sae = logits_with_sae.cpu().numpy()
+
+    # Remove the hook
+    handle.remove()
+
+    # Compute differences
+    logit_differences = logits_with_sae - logits_without_sae
+
+    # Return the differences
+    return logits_without_sae, logits_with_sae, logit_differences
+
+
+# %%
+
+
+# Function to collect strongly activating features and corresponding observations
+def collect_strong_activations(
+    sae,
+    model,
+    layer_number,
+    threshold=1.0,
+    num_episodes=10,
+    max_steps_per_episode=1000,
+    feature_indices=None,
+    device=device,
+):
+    # Ensure model and sae are in eval mode
+    model.eval()
+    sae.eval()
+
+    # Initialize ModelActivations for the layer
+    layer_name = ordered_layer_names[layer_number]
+    layer_paths = [layer_name]
+    model_activations = helpers.ModelActivations(model, layer_paths=layer_paths)
+
+    # Initialize data structure to store observations
+    from collections import defaultdict
+
+    feature_observations = defaultdict(list)
+
+    # If feature_indices is None, monitor all features
+    if feature_indices is None:
+        feature_indices = range(sae.cfg.d_hidden)
+
+    # Create the environment
+    env = heist.create_venv(
+        num=1,
+        num_levels=0,
+        start_level=random.randint(1, 100000),
+        distribution_mode="easy",
+    )
+
+    for episode in range(num_episodes):
+        obs = env.reset()
+        done = False
+        steps = 0
+
+        while not done and steps < max_steps_per_episode:
+            obs_tensor = t.tensor(obs, dtype=t.float32)  # Add batch dimension
+
+            # Run the model and get activations
+            with t.no_grad():
+                outputs, activations = model_activations.run_with_cache(obs_tensor)
+                # Get the layer activation
+                layer_activation = activations[layer_name.replace(".", "_")]
+                # Flatten layer activation
+                h = layer_activation.view(1, -1).to(device)
+                # Pass through SAE to get feature activations
+                _, _, _, acts = sae(h)
+                acts = acts.cpu().numpy()[0]  # Get numpy array, remove batch dimension
+
+            # Check for strongly activated features
+            for idx in feature_indices:
+                activation_value = acts[idx]
+                if activation_value >= threshold:
+                    # Record the observation and activation value
+                    feature_observations[idx].append((obs.copy(), activation_value))
+
+            # Get action from the model outputs
+            logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+            probabilities = t.softmax(logits, dim=-1)
+            action = t.multinomial(probabilities, num_samples=1).item()
+
+            # Step the environment
+            obs, reward, done, info = env.step(np.array([action]))
+            steps += 1
+
+    env.close()
+    return feature_observations
 
 
 # ModelActivations class modified for batch processing
@@ -285,11 +412,11 @@ def replace_layer_with_sae(model, sae, layer_number):
     return handle  # Return the handle to remove the hook later
 
 
-sae_model_path = "../checkpoints/checkpoints_batch2/layer_1_conv1a/sae_checkpoint_step_100.pt"  # Path to your saved SAE model
+sae_model_path = "../src/checkpoints/layer_6_conv3a/sae_checkpoint_step_40000.pt"  # Path to your saved SAE model
 
 
 # # Assuming you have trained the SAE for the desired layer
-layer_number = 1  # Replace with your target layer number
+layer_number = 6  # Replace with your target layer number
 sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
 # %%
 # Measure logit differences
@@ -311,33 +438,11 @@ plt.xlabel("Logit Difference")
 plt.ylabel("Frequency")
 plt.show()
 
-# %%
-# Load the trained SAE and model
-
-# Measure the logit differences
-logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
-    model, sae, layer_number, num_samples=100
-)
-
-# Compute statistics
-mean_abs_diff = np.mean(np.abs(logit_differences))
-max_abs_diff = np.max(np.abs(logit_differences))
-print(f"Mean absolute difference in logits: {mean_abs_diff}")
-print(f"Max absolute difference in logits: {max_abs_diff}")
-
-# Visualize
-plt.figure(figsize=(10, 6))
-plt.hist(logit_differences.flatten(), bins=50)
-plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
-plt.xlabel("Logit Difference")
-plt.ylabel("Frequency")
-plt.show()
-
 
 # %%
 def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
     # Function to run episodes and collect total rewards
-    def run_episodes(model, num_episodes, save_gif=False):
+    def run_episodes(model, num_episodes, save_gif=False, with_sae=False):
         total_rewards = []
         for episode in range(num_episodes):
             env = heist.create_venv(
@@ -375,7 +480,8 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
                 import imageio
 
                 # Save the gif
-                gif_path = f"episode_{episode}_{save_gif}.gif"
+                sae_suffix = "with_sae" if with_sae else "without_sae"
+                gif_path = f"episode_{episode}_{sae_suffix}.gif"
                 imageio.mimsave(gif_path, frames, fps=30)
 
         env.close()
@@ -383,14 +489,14 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
     # Run episodes without SAE
     model.eval()
-    rewards_without_sae = run_episodes(model, num_episodes, save_gif=False)
+    rewards_without_sae = run_episodes(model, num_episodes, save_gif=True, with_sae=False)
 
     # Register the hook
     handle = replace_layer_with_sae(model, sae, layer_number)
 
     # Run episodes with SAE
     model.eval()
-    rewards_with_sae = run_episodes(model, num_episodes, save_gif=True)
+    rewards_with_sae = run_episodes(model, num_episodes, save_gif=True, with_sae=True)
 
     # Remove the hook
     handle.remove()
@@ -403,19 +509,6 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
     print(f"Average reward with SAE: {avg_reward_with_sae}")
 
     return rewards_without_sae, rewards_with_sae
-
-
-sae_model_path = "checkpoints/layer_8_conv4a/sae_checkpoint_step_3700.pt"  # Path to your saved SAE model
-
-
-# # Assuming you have trained the SAE for the desired layer
-layer_number = 8  # Replace with your target layer number
-sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
-# %%
-# Measure logit differences
-logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
-    model, sae, layer_number, num_samples=100
-)
 
 
 model = load_interpretable_model().to(device)
