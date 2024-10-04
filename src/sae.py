@@ -1,6 +1,6 @@
 # sae.py
 # %%
-
+import io
 import os
 import sys
 import glob
@@ -16,6 +16,8 @@ from tqdm.auto import tqdm
 import wandb
 import einops
 import math
+from PIL import Image
+from src.extract_sae_features import replace_layer_with_sae
 
 # Import your heist environment module
 sys.path.append("../")  # Adjust the path if necessary to import your modules
@@ -196,7 +198,7 @@ class SAE(nn.Module):
     def forward(self, h):
         # Encoder
         z = t.matmul(h, self.W_enc) + self.b_enc
-        acts = jump_relu(z, jump_value=self.cfg.jump_value)
+        acts = F.relu(z)
 
         # Decoder
         h_reconstructed = t.matmul(acts, self.W_dec) + self.b_dec  # [batch_size, d_in]
@@ -407,7 +409,7 @@ def get_layer_hyperparameters(layer_name, layer_types):
     layer_type = layer_types.get(layer_name, "other")
     if layer_type == "conv":
         return {
-            "d_hidden": 4096,  # Example value for conv layers
+            "d_hidden": 16384,  # Example value for conv layers
             "l1_coeff": 0.000001,  # Example value for conv layers
         }
     elif layer_type == "fc":
@@ -434,6 +436,37 @@ def get_module_by_path(model, layer_path):
         else:
             module = getattr(module, element)
     return module
+
+
+def run_test_episodes(model, num_envs=8, episode_length=150):
+    venv = heist.create_venv(
+        num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
+    )
+    obs = venv.reset()
+    total_rewards = np.zeros(num_envs)
+    steps = np.zeros(num_envs, dtype=int)
+
+    while np.any(steps < episode_length):
+        observations = t.tensor(obs, dtype=t.float32).to(device)
+        observations = einops.rearrange(observations, "b h w c -> b c h w")
+
+        with t.no_grad():
+            outputs = model(observations)
+            logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
+            actions = t.argmax(logits, dim=-1).cpu().numpy()
+
+        obs, rewards, dones, _ = venv.step(actions)
+        total_rewards += rewards
+        steps += 1
+
+        # Reset environments that are done
+        for i, done in enumerate(dones):
+            if done:
+                total_rewards[i] = 0
+                steps[i] = 0
+
+    venv.close()
+    return total_rewards
 
 
 def train_sae(
@@ -532,15 +565,15 @@ def train_sae(
         device=device,
     )
 
-    # Refill the replay buffer
-    collect_activations_into_replay_buffer(
-        model,
-        model_activations,
-        layer_number,
-        replay_buffer,
-        num_envs=num_envs,
-        episode_length=episode_length,
-    )
+    # # Refill the replay buffer
+    # collect_activations_into_replay_buffer(
+    #     model,
+    #     model_activations,
+    #     layer_number,
+    #     replay_buffer,
+    #     num_envs=num_envs,
+    #     episode_length=episode_length,
+    # )
 
     progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
     loss_history = []
@@ -553,7 +586,6 @@ def train_sae(
     for step in progress_bar:
         # Refill the replay buffer if needed
         if step % 50 == 0:
-            # Refill the replay buffer
             collect_activations_into_replay_buffer(
                 model,
                 model_activations,
@@ -563,6 +595,15 @@ def train_sae(
                 episode_length=episode_length,
             )
 
+            # Calculate mean and std deviation of the entire replay buffer
+            all_activations = replay_buffer.activations[: replay_buffer.size]
+            buffer_mean = t.mean(all_activations, dim=0)
+            buffer_std = t.std(all_activations, dim=0)
+
+            print(
+                f"Replay Buffer Stats - Mean: {buffer_mean.mean().item():.4f}, Std: {buffer_std.mean().item():.4f}"
+            )
+
         # Sample from the replay buffer
         try:
             activations_unflattened, observations = replay_buffer.sample(batch_size)
@@ -570,12 +611,21 @@ def train_sae(
             print(f"Error during activation sampling: {e}")
             continue  # Skip this iteration and proceed
 
+        activations_unflattened = (activations_unflattened - buffer_mean) / (
+            buffer_std + 1e-8
+        )
+
         # Flatten activations before feeding them into the SAE
         activations = activations_unflattened.view(batch_size, -1).to(device)
+
+        # Normalize activations by mean and std dev
+
         observations = observations.to(device)
 
         optimizer.zero_grad()
         loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(activations)
+
+        # Denormalize the reconstructed activations
         # nn.utils.clip_grad_norm_(sae.parameters(), max_norm=1.0)
 
         # Reshape h_reconstructed back to original activation shape
@@ -584,6 +634,7 @@ def train_sae(
         h_reconstructed_reshaped = h_reconstructed.view(
             batch_size_curr, *activation_shape
         )
+        h_reconstructed = h_reconstructed * buffer_std + buffer_mean
 
         # Prepare observations for the model
         observations_prepared = einops.rearrange(observations, "b h w c -> b c h w")
@@ -632,17 +683,10 @@ def train_sae(
         )
 
         # Update the histogram of active logits
-        if active_logits_histogram is None:
-            active_logits_histogram = t.zeros(
-                logits_original.size(-1), dtype=t.int64, device=device
-            )
-        # Count occurrences of each logit index
-        active_indices = t.argmax(logits_original, dim=-1)
-        for index in active_indices:
-            active_logits_histogram[index] += 1
 
+        # Count occurrences of each logit index
         # Add the KL divergence to the total loss
-        total_loss = loss + logits_diff
+        total_loss = 10 * logits_diff + L_reconstruction
 
         # Backpropagate
         total_loss.backward()
@@ -662,6 +706,7 @@ def train_sae(
             progress_bar.set_postfix(
                 {
                     "Loss": loss.item(),
+                    "total loss": total_loss.item(),
                     "Reconstruction": L_reconstruction.item(),
                     "Sparsity": L_sparsity.item(),
                     "Variance Explained": variance_explained,
@@ -674,10 +719,14 @@ def train_sae(
             variance_explained_history.append(variance_explained)
 
             # Log metrics to wandb
+
+            # Optionally, visualize the differences
+            # Log metrics to wandb without the graph and episode runs
             wandb.log(
                 {
                     "step": step,
                     "loss": loss.item(),
+                    "total loss": total_loss.item(),
                     "reconstruction_loss": L_reconstruction.item(),
                     "sparsity_loss": L_sparsity.item(),
                     "logits_diff": logits_diff.item(),
@@ -689,8 +738,54 @@ def train_sae(
                 step=step,
             )
 
-        # Save checkpoint every 100 steps
-        if (step + 1) % 10000 == 0 or step == steps - 1:
+            # Generate graph and run episodes every 1000 steps
+            if step % 1000 == 0:
+                import matplotlib.pyplot as plt
+
+                logit_differences = logits_reconstructed - logits_original
+                # Analyze the differences
+                plt.figure(figsize=(10, 6))
+                plt.hist(logit_differences.flatten().cpu().detach().numpy(), bins=50)
+                plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
+                plt.xlabel("Logit Difference")
+                plt.ylabel("Frequency")
+
+                # Save the plot to a buffer
+                buf = io.BytesIO()
+                plt.savefig(buf, format="png")
+                buf.seek(0)
+                # Convert BytesIO to a PIL Image
+                img = Image.open(buf)
+
+                rewards_without_sae = run_test_episodes(
+                    model, num_envs=8, episode_length=150
+                )
+
+                # Register the SAE hook
+                handle = replace_layer_with_sae(model, sae, layer_number)
+
+                # Run test episodes with SAE
+                rewards_with_sae = run_test_episodes(
+                    model, num_envs=8, episode_length=50
+                )
+                avg_reward_with_sae = sum(rewards_with_sae) / len(rewards_with_sae)
+
+                # Remove the SAE hook
+                handle.remove()
+
+                # Log the image and episode metrics to wandb
+                wandb.log(
+                    {
+                        "logit_differences_histogram": wandb.Image(img),
+                        "avg_reward_with_sae": avg_reward_with_sae,
+                    },
+                    step=step,
+                )
+
+                plt.close()  # Close the plot to free up memory
+
+        # Save checkpoint every 10000 steps
+        if (step + 1) % 10000 == 0 and step > 1 or step == steps - 1:
             checkpoint_path = os.path.join(
                 layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt"
             )

@@ -155,10 +155,10 @@ sae.train_all_layers(
     wandb_project="SAE_training",
     steps_per_layer=200000,
     batch_size=64,
-    lr=1e-7,
+    lr=1e-5,
     num_envs=8,
     episode_length=150,
-    log_freq=10,
+    log_freq=100,
 )
 
 # %%

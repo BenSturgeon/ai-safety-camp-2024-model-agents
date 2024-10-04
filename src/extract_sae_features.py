@@ -66,20 +66,17 @@ layer_types = {
 def measure_logit_difference(model, sae, layer_number, num_samples=100):
     # Generate observations
     observations = []
-    env = heist.create_venv(num=1, num_levels=0, start_level=random.randint(1, 100000))
+    env = heist.create_venv(
+        num=num_samples, num_levels=0, start_level=random.randint(1, 100000)
+    )
     obs = env.reset()
-    for _ in range(num_samples):
-        observations.append(obs[0].copy())
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(np.array([action]))
-        if done[0]:
-            obs = env.reset()
+
+    observations.append(obs.copy())
 
     # Convert observations to tensor
-    obs_tensor = t.tensor(np.array(observations), dtype=t.float32)
+    obs_tensor = t.tensor(observations, dtype=t.float32).squeeze(dim=0)
     print(obs_tensor.shape)
-    obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
-    print(obs_tensor.shape)
+    # obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
 
     # Get logits without SAE
     with t.no_grad():
@@ -105,6 +102,14 @@ def measure_logit_difference(model, sae, layer_number, num_samples=100):
 
     # Compute differences
     logit_differences = logits_with_sae - logits_without_sae
+
+    kl_div = F.kl_div(
+        F.log_softmax(t.tensor(logits_with_sae), dim=-1),
+        F.log_softmax(t.tensor(logits_without_sae), dim=-1),
+        reduction="batchmean",
+        log_target=True,
+    )
+    print("kl_div", kl_div)
 
     # Return the differences
     return logits_without_sae, logits_with_sae, logit_differences
@@ -399,24 +404,29 @@ def replace_layer_with_sae(model, sae, layer_number):
     # Define the hook function
     def hook_fn(module, input, output):
 
-        print(input[0].shape)
-        # h = layer_activation.view(1, -1).to(device)
+        # Handle possible batches using einops
+        if input[0].dim() == 4:  # Batch of 2D inputs (e.g., for conv layers)
+            h = einops.rearrange(input[0], "b c h w -> b (c h w)")
+        elif input[0].dim() == 3:  # Batch of 1D inputs (e.g., for fc layers)
+            h = einops.rearrange(input[0], "b s f -> b (s f)")
+        else:  # Single input
+            h = einops.rearrange(input[0], "... -> 1 (...)")
 
-        h = input[0].flatten()
-        print(h.shape)
+        h = h.to(device)
+
         # Pass through SAE
-        return None
+
         _, _, _, acts, h_reconstructed = sae(h)
 
         # Reshape h_reconstructed back to original shape using reshape_as
         h_reconstructed = h_reconstructed.reshape_as(output)
 
-        print("Input:", input)
-        print("Reconstructed:", h_reconstructed)
-        print("Original output:", output)
-        print(output.shape, h_reconstructed.shape)
+        # print("Input:", input)
+        # print("Reconstructed:", h_reconstructed)
+        # print("Original output:", output)
+        # print(output.shape, h_reconstructed.shape)
 
-        print("Output diff", output - h_reconstructed)
+        # print("Output diff", output - h_reconstructed)
 
         return h_reconstructed
 
@@ -425,31 +435,33 @@ def replace_layer_with_sae(model, sae, layer_number):
     return handle  # Return the handle to remove the hook later
 
 
-sae_model_path = "../src/checkpoints/layer_6_conv3a/sae_checkpoint_step_100000.pt"  # Path to your saved SAE model
+# # %%
+# sae_model_path = "../src/checkpoints/layer_6_conv3a/sae_checkpoint_step_20000.pt"  # Path to your saved SAE model
 
 
-# # Assuming you have trained the SAE for the desired layer
-layer_number = 6  # Replace with your target layer number
-sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
-# %%
-# Measure logit differences
-logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
-    model, sae, layer_number, num_samples=100
-)
+# # # Assuming you have trained the SAE for the desired layer
+# layer_number = 6  # Replace with your target layer number
+# sae, _, _, model, _ = load_sae_model(layer_number, sae_model_path)
 
-# Analyze the differences
-mean_difference = np.mean(np.abs(logit_differences))
-print(f"Mean absolute difference in logits: {mean_difference}")
+# # Measure logit differences
+# logits_without_sae, logits_with_sae, logit_differences = measure_logit_difference(
+#     model, sae, layer_number, num_samples=100
+# )
 
-# Optionally, visualize the differences
-import matplotlib.pyplot as plt
 
-plt.figure(figsize=(10, 6))
-plt.hist(logit_differences.flatten(), bins=50)
-plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
-plt.xlabel("Logit Difference")
-plt.ylabel("Frequency")
-plt.show()
+# # Analyze the differences
+# mean_difference = np.mean(np.abs(logit_differences))
+# print(f"Mean absolute difference in logits: {mean_difference}")
+
+# # Optionally, visualize the differences
+# import matplotlib.pyplot as plt
+
+# plt.figure(figsize=(10, 6))
+# plt.hist(logit_differences.flatten(), bins=50)
+# plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
+# plt.xlabel("Logit Difference")
+# plt.ylabel("Frequency")
+# plt.show()
 
 
 # %%
@@ -511,7 +523,7 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
 
     # Run episodes with SAE
     model.eval()
-    rewards_with_sae = run_episodes(model, num_episodes, save_gif=False, with_sae=True)
+    rewards_with_sae = run_episodes(model, num_episodes, save_gif=True, with_sae=True)
 
     # Remove the hook
     handle.remove()
@@ -526,8 +538,8 @@ def evaluate_model_performance(model, sae, layer_number, num_episodes=10):
     return rewards_without_sae, rewards_with_sae
 
 
-model = load_interpretable_model().to(device)
-evaluate_model_performance(model, sae, layer_number, 10)
+# model = load_interpretable_model().to(device)
+# evaluate_model_performance(model, sae, layer_number, 3)
 
 # %%
 
