@@ -61,17 +61,17 @@ def plot_total_pickups_by_channel(objectives):
         
         plt.plot(channels, pickups, marker='o', linestyle='-', label=f'Mod -{mod}')
     
-    plt.title('Total Count of Pickups by Channel for Different Mod Values')
-    plt.xlabel('Channel')
-    plt.ylabel('Total Count of Pickups')
+    plt.title('Total Count of Pickups by Channel for Different Mod Values',fontsize=14)
+    plt.xlabel('Channel',fontsize=14)
+    plt.ylabel('Total Count of Pickups',fontsize=14)
     plt.legend()
     plt.grid(True)
     
     # Show every 5th channel for readability
-    plt.xticks(channels[::5])
+    plt.xticks(channels[::3], fontsize=14)
     
     # Set y-axis to integer values from 0 to max_pickups
-    plt.yticks(range(max_pickups + 1))
+    plt.yticks(range(101)[::10])
     
     plt.tight_layout()
     plt.show()

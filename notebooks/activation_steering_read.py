@@ -1,22 +1,22 @@
-import heist
-import helpers
-import torch
+# import heist
+# import helpers
+# import torch
 
-import random
-from helpers import generate_action, load_model
-import imageio
-import typing
-import math
-import struct
-import typing
-from typing import Tuple, Dict, Callable, List, Optional
-from dataclasses import dataclass
+# import random
+# from helpers import generate_action, load_model
+# import imageio
+# import typing
+# import math
+# import struct
+# import typing
+# from typing import Tuple, Dict, Callable, List, Optional
+# from dataclasses import dataclass
 
-from gym3 import ToBaselinesVecEnv
-import random
+# from gym3 import ToBaselinesVecEnv
+# import random
 
 
-from steering_experiments import run_entity_steering_experiment
+# from steering_experiments import run_entity_steering_experiment
 
 import pickle
 import matplotlib.pyplot as plt
@@ -43,13 +43,13 @@ ordered_layer_names  = {
 }
 
 
-model_path = "../model_interpretable.pt"
-modification_value = -2
-total_episodes = 200
-objectives = {}
+# model_path = "../model_interpretable.pt"
+# modification_value = -2
+# total_episodes = 200
+# objectives = {}
 
-entity = ["key", "lock", "gem"]
-entity_colors = ["blue", "red", "green"]
+# entity = ["key", "lock", "gem"]
+# entity_colors = ["blue", "red", "green"]
 layers_to_test = range(1, 14)
 
 # Read the objectives object from the pickle file
@@ -121,10 +121,10 @@ for i, metric in enumerate(metrics):
         
         plt.plot(list(layers_to_test), percentage_values, label=label, marker='o')
     
-    plt.title(titles[i])
-    plt.xlabel('Layer Number')
-    plt.ylabel(f'{metric.replace("_", " ").title()} (% of Max)')
-    plt.legend()
+    # plt.title(titles[i], fontsize=14)
+    plt.xlabel('Layer Number', fontsize=14)
+    plt.ylabel(f'Percentage of times picked up', fontsize=14)
+    plt.legend(fontsize=12)
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(f'entity_steering_{metric}_percentage.png')

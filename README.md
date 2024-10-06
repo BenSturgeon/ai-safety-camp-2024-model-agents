@@ -28,3 +28,5 @@ For this one must install qt@5 using brew and then add this to your system path 
 
 Then, normally it makes sense to build procgen from source. I have also had to modify CMakeLists.txt to ensure that warnings are not treated as errors, and this has made building easier.
 
+Change the line in CMAKELISTS.txt that contains the flag -werror to this:
+add_compile_options(-Wextra -Wshadow -Wall -Wformat=2 -Wundef -Wvla -Wmissing-include-dirs -Wnon-virtual-dtor -Wno-unused-parameter -Wno-unused-variable)
