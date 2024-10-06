@@ -1,24 +1,37 @@
 import torch
 import torch.nn as nn
 
+
 class CustomCNN(nn.Module):
-    def __init__(self, obs_space, num_outputs, conv_dropout_prob=0.01, fc_dropout_prob=0):
+    def __init__(
+        self, obs_space, num_outputs, conv_dropout_prob=0.01, fc_dropout_prob=0
+    ):
         super(CustomCNN, self).__init__()
 
         h, w, c = obs_space.shape
         self.num_outputs = num_outputs
 
-        self.conv1a = nn.Conv2d(in_channels=c, out_channels=16, kernel_size=7, padding=3)
+        self.conv1a = nn.Conv2d(
+            in_channels=c, out_channels=16, kernel_size=7, padding=3
+        )
         self.pool1 = nn.LPPool2d(2, kernel_size=2, stride=2)
 
-        self.conv2a = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=5, padding=2)
-        self.conv2b = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=5, padding=2)
+        self.conv2a = nn.Conv2d(
+            in_channels=16, out_channels=32, kernel_size=5, padding=2
+        )
+        self.conv2b = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=5, padding=2
+        )
         self.pool2 = nn.LPPool2d(2, kernel_size=2, stride=2)
 
-        self.conv3a = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=5, padding=2)
+        self.conv3a = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=5, padding=2
+        )
         self.pool3 = nn.LPPool2d(2, kernel_size=2, stride=2)
 
-        self.conv4a = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=5, padding=2)
+        self.conv4a = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=5, padding=2
+        )
         self.pool4 = nn.LPPool2d(2, kernel_size=2, stride=2)
 
         # Compute the flattened dimension after convolutions and pooling
@@ -29,7 +42,7 @@ class CustomCNN(nn.Module):
         self.fc3 = nn.Linear(in_features=512, out_features=num_outputs)
 
         self.value_fc = nn.Linear(in_features=512, out_features=1)
-        
+
         self.dropout_conv = nn.Dropout2d(p=conv_dropout_prob)
         self.dropout_fc = nn.Dropout(p=fc_dropout_prob)
 
@@ -42,9 +55,31 @@ class CustomCNN(nn.Module):
         return x.numel()
 
     def forward(self, obs):
-        assert obs.ndim == 4
-        x = obs / 255.0  # scale to 0-1
-        x = x.permute(0, 3, 1, 2)  # NHWC => NCHW
+        assert obs.ndim == 4, f"Expected 4D input, got {obs.ndim}D"
+        if not isinstance(obs, torch.Tensor):
+            obs = torch.tensor(obs)
+
+        # Check for different input formats and convert if necessary
+        if obs.shape[1:] != (3, 64, 64):
+            if obs.shape[1:] == (64, 3, 64):  # NHWC format
+                obs = obs.permute(0, 2, 1, 3)
+            elif obs.shape[1:] == (64, 64, 3):  # NHWC format
+                obs = obs.permute(0, 3, 1, 2)
+
+        # Input range check and normalization
+        obs_min, obs_max = obs.min(), obs.max()
+        if obs_min < 0 or obs_max > 255:
+            raise ValueError(
+                f"Input values out of expected range. Min: {obs_min}, Max: {obs_max}"
+            )
+        elif obs_max <= 1:
+            x = obs  # Already in [0, 1] range
+        else:
+            x = obs.float() / 255.0  # scale to 0-1
+
+        x = x.to(
+            self.conv1a.weight.device
+        )  # Ensure x is on the same device as the model
 
         x = torch.relu(self.conv1a(x))
         x = self.pool1(x)
@@ -66,16 +101,16 @@ class CustomCNN(nn.Module):
         x = torch.flatten(x, start_dim=1)
 
         x = torch.relu(self.fc1(x))
-        #x = self.dropout_fc(x)
-        
+        # x = self.dropout_fc(x)
+
         x = torch.relu(self.fc2(x))
         x = self.dropout_fc(x)
-        
+
         logits = self.fc3(x)
         dist = torch.distributions.Categorical(logits=logits)
-        
+
         value = self.value_fc(x)
-        
+
         return dist, value
 
     def save_to_file(self, model_path):

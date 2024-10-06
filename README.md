@@ -13,14 +13,18 @@ python3.9 -m venv venv
 source venv/bin/activate
 poetry install
 ```
+If you aren't using poetry it is highly recommended that you install the project. 
+You can achieve this by running the following in the root directory.
+```bash
+pip install -e .
+```
 
-Since `procgen-tools` is "special" (deps are not managed well) we need to install it manually afterwards:
+
+Since `procgen-tools` is not managed well we need to install it manually afterwards:
 ```bash
 (to access the poetry environment in your shell for installing pip, use the command: "poetry shell")
 pip install git+https://github.com/UlisseMini/procgen-tools.git
-```  # backtesting_conversion
-
-```
+```  
 
 To get procgen to build on a mac requires some work to get the C code to build.
 

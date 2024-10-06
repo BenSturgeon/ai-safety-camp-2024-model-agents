@@ -175,3 +175,7 @@ mlruns/
 # media
 *.gif
 *.png
+
+# Weights & Biases
+wandb/
+*.wandb
