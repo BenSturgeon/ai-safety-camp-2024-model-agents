@@ -27,7 +27,7 @@ sys.path.append("../")  # Adjust the path if necessary to import your modules
 from src.utils import helpers, heist
 
 # Set device
-device = t.device("cuda" if t.cuda.is_available() else "cpu")
+# device = t.device("cuda" if t.cuda.is_available() else "cpu")
 # device = t.device("cpu")
 
 # Ordered layer names

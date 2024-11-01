@@ -1,3 +1,4 @@
+
 # sae.py
 import io
 import os
@@ -20,8 +21,15 @@ from src.extract_sae_features import replace_layer_with_sae
 
 from src.utils import helpers, heist
 
-device = t.device("cuda" if t.cuda.is_available() else "cpu")
+def get_device():
+    if t.cuda.is_available():
+        return t.device("cuda")
+    elif hasattr(t.backends, "mps") and t.backends.mps.is_available():
+        return t.device("mps")
+    else:
+        return t.device("cpu")
 
+device = get_device()
 ordered_layer_names = {
     1: "conv1a",
     2: "pool1",
@@ -126,27 +134,26 @@ class SAEConfig:
     jump_value: float = 0.1
 
 class SAE(nn.Module):
-    """
-    Sparse Autoencoder (SAE) model.
-    """
-    def __init__(self, cfg: SAEConfig):
+    def __init__(self, cfg: SAEConfig, device):
         super().__init__()
         self.cfg = cfg
+        self.device = device
 
-        self.W_enc = nn.Parameter(t.empty(self.cfg.d_in, self.cfg.d_hidden))
+        self.W_enc = nn.Parameter(t.empty(self.cfg.d_in, self.cfg.d_hidden, device=device))
         nn.init.kaiming_uniform_(self.W_enc, nonlinearity="relu")
-        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden))
+        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden, device=device))
 
         if self.cfg.tied_weights:
             self.W_dec = self.W_enc.t()
         else:
-            self.W_dec = nn.Parameter(t.empty(self.cfg.d_hidden, self.cfg.d_in))
+            self.W_dec = nn.Parameter(t.empty(self.cfg.d_hidden, self.cfg.d_in, device=device))
             nn.init.kaiming_uniform_(self.W_dec, nonlinearity="relu")
-        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in))
+        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in, device=device))
 
         self.to(device)
 
     def forward(self, h):
+        h = h.to(self.device)
         z = t.matmul(h, self.W_enc) + self.b_enc
         acts = F.relu(z)
 
@@ -511,9 +518,11 @@ def train_sae(
 
         batch_size_curr = h_reconstructed.size(0)
 
-        h_reconstructed_reshaped = h_reconstructed.view(
-            batch_size_curr, *activation_shape
-        )
+        buffer_std = buffer_std.view(1, 32, 16, 16)
+        buffer_mean = buffer_mean.view(1, 32, 16, 16)
+
+        h_reconstructed = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+
         h_reconstructed = h_reconstructed * buffer_std + buffer_mean
 
         observations_prepared = einops.rearrange(observations, "b h w c -> b c h w")
@@ -528,7 +537,7 @@ def train_sae(
             )
 
         def replace_activation_hook(module, input, output):
-            return h_reconstructed_reshaped
+            return h_reconstructed
 
         hook_handle = module_at_layer.register_forward_hook(replace_activation_hook)
         outputs_reconstructed = model(observations_prepared)
@@ -552,8 +561,14 @@ def train_sae(
         optimizer.step()
 
         with t.no_grad():
-            numerator = t.sum((activations - h_reconstructed) ** 2, dim=1)
-            denominator = t.sum(activations**2, dim=1)
+            activations_reshaped = activations.view(batch_size_curr, 32, 16, 16)
+            h_reconstructed_reshaped = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+            
+            activations_flat = activations_reshaped.view(batch_size_curr, -1)
+            h_reconstructed_flat = h_reconstructed_reshaped.view(batch_size_curr, -1)
+            
+            numerator = t.sum((activations_flat - h_reconstructed_flat) ** 2, dim=1)
+            denominator = t.sum(activations_flat**2, dim=1)
             variance_explained = 1 - numerator / (denominator + 1e-8)
             variance_explained = variance_explained.mean().item()
             acts_mean = acts.mean().item()
@@ -784,7 +799,7 @@ def train_all_layers(
             tied_weights=False,
         )
 
-        sae_model = SAE(sae_cfg)
+        sae_model = SAE(sae_cfg, device)
 
         (
             loss_history,
