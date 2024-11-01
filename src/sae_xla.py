@@ -1,5 +1,3 @@
-# %%
-# sae.py
 import io
 import os
 import sys
@@ -9,7 +7,7 @@ import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, DistributedSampler
 import numpy as np
 from dataclasses import dataclass
 from tqdm.auto import tqdm
@@ -19,15 +17,17 @@ import math
 from PIL import Image
 from src.extract_sae_features import replace_layer_with_sae
 
-import torch_xla
-import torch_xla.core.xla_model as xm
-import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.debug.metrics as met
-
 from src.utils import helpers, heist
 
-device = t.device("cuda" if t.cuda.is_available() else "cpu")
-# %%
+import torch_xla
+import torch_xla.core.xla_model as xm
+import torch_xla.debug.metrics as met
+import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.utils.utils as xu
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+os.environ['XLA_FLAGS'] = '--xla_hlo_profile'
+
 ordered_layer_names = {
     1: "conv1a",
     2: "pool1",
@@ -65,18 +65,15 @@ layer_types = {
 }
 
 class ReplayBuffer:
-    """
-    A replay buffer to store and sample activations and observations.
-    """
     def __init__(self, capacity, activation_shape, observation_shape, device):
         self.capacity = capacity
-        self.activation_shape = activation_shape  
+        self.activation_shape = activation_shape
         self.observation_shape = observation_shape
         self.device = device
         self.activations = t.empty((capacity, *activation_shape), device=device)
         self.observations = t.empty((capacity, *observation_shape), device=device)
         self.size = 0
-        self.position = 0  
+        self.position = 0
 
     def add(self, activation, observation):
         self.activations[self.position] = activation.to(self.device)
@@ -97,23 +94,10 @@ class ReplayBuffer:
         return self.size >= self.capacity
 
 def jump_relu(x, jump_value=0.1):
-    """
-    Applies a jump ReLU activation function.
-    """
     out = t.where(x > 0, x + jump_value, t.zeros_like(x))
     return out
 
 def topk_activation(x, k):
-    """
-    Applies Top-k activation to the input tensor.
-
-    Args:
-        x (torch.Tensor): Input tensor of shape (batch_size, num_features).
-        k (int): Number of top activations to keep per sample.
-
-    Returns:
-        torch.Tensor: Tensor with only the top k activations per sample kept.
-    """
     values, indices = t.topk(x, k=k, dim=1)
     mask = t.zeros_like(x)
     mask.scatter_(1, indices, 1)
@@ -121,9 +105,6 @@ def topk_activation(x, k):
 
 @dataclass
 class SAEConfig:
-    """
-    Configuration for the Sparse Autoencoder (SAE).
-    """
     d_in: int = None
     d_hidden: int = 128
     l1_coeff: float = 0.1
@@ -132,27 +113,26 @@ class SAEConfig:
     jump_value: float = 0.1
 
 class SAE(nn.Module):
-    """
-    Sparse Autoencoder (SAE) model.
-    """
-    def __init__(self, cfg: SAEConfig):
+    def __init__(self, cfg: SAEConfig, device):
         super().__init__()
         self.cfg = cfg
+        self.device = device
 
-        self.W_enc = nn.Parameter(t.empty(self.cfg.d_in, self.cfg.d_hidden))
+        self.W_enc = nn.Parameter(t.empty(self.cfg.d_in, self.cfg.d_hidden, device=device))
         nn.init.kaiming_uniform_(self.W_enc, nonlinearity="relu")
-        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden))
+        self.b_enc = nn.Parameter(t.zeros(self.cfg.d_hidden, device=device))
 
         if self.cfg.tied_weights:
             self.W_dec = self.W_enc.t()
         else:
-            self.W_dec = nn.Parameter(t.empty(self.cfg.d_hidden, self.cfg.d_in))
+            self.W_dec = nn.Parameter(t.empty(self.cfg.d_hidden, self.cfg.d_in, device=device))
             nn.init.kaiming_uniform_(self.W_dec, nonlinearity="relu")
-        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in))
+        self.b_dec = nn.Parameter(t.zeros(self.cfg.d_in, device=device))
 
         self.to(device)
 
     def forward(self, h):
+        h = h.to(self.device)
         z = t.matmul(h, self.W_enc) + self.b_enc
         acts = F.relu(z)
 
@@ -169,13 +149,10 @@ def collect_activations_into_replay_buffer(
     model_activations,
     layer_number,
     replay_buffer,
+    device,
     num_envs=8,
     episode_length=150,
 ):
-    """
-    Run multiple environments in parallel, collect activations over full episodes,
-    and store them into the replay buffer.
-    """
     venv = heist.create_venv(
         num=num_envs,
         num_levels=0,
@@ -241,13 +218,11 @@ def generate_batch_activations_parallel(
     model,
     model_activations,
     layer_number,
+    device,
     batch_size=32,
     num_envs=8,
     episode_length=150,
 ):
-    """
-    Generate activations from multiple environments running in parallel.
-    """
     venv = heist.create_venv(
         num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
     )
@@ -271,7 +246,7 @@ def generate_batch_activations_parallel(
         layer_activation = activations[layer_name.replace(".", "_")]
 
         activation_buffer.append(layer_activation.cpu())
-        obs_buffer.append(observations.cpu())
+        obs_buffer.append(observations)
 
         logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
         probabilities = t.softmax(logits, dim=-1)
@@ -289,18 +264,16 @@ def generate_batch_activations_parallel(
     if activations_tensor.size(0) >= batch_size:
         activations_tensor = activations_tensor[:batch_size]
     else:
-        print(
-            f"Warning: Collected only {activations_tensor.size(0)} activations, expected {batch_size}."
-        )
+        if xm.is_master_ordinal():
+            print(
+                f"Warning: Collected only {activations_tensor.size(0)} activations, expected {batch_size}."
+            )
 
     observations_tensor = t.cat(obs_buffer, dim=0)[:batch_size]
 
     return activations_tensor, observations_tensor, activation_shapes
 
 def find_latest_checkpoint(checkpoint_dir):
-    """
-    Helper function to find the latest checkpoint.
-    """
     checkpoint_files = glob.glob(
         os.path.join(checkpoint_dir, "sae_checkpoint_step_*.pt")
     )
@@ -317,9 +290,6 @@ def find_latest_checkpoint(checkpoint_dir):
     return latest_checkpoint, latest_step
 
 def get_layer_hyperparameters(layer_name, layer_types):
-    """
-    Function to assign hyperparameters based on layer type.
-    """
     layer_type = layer_types.get(layer_name, "other")
     if layer_type == "conv":
         return {
@@ -338,9 +308,6 @@ def get_layer_hyperparameters(layer_name, layer_types):
         }
 
 def get_module_by_path(model, layer_path):
-    """
-    Get a module from the model by its path.
-    """
     elements = layer_path.split(".")
     module = model
     for element in elements:
@@ -352,10 +319,7 @@ def get_module_by_path(model, layer_path):
             module = getattr(module, element)
     return module
 
-def run_test_episodes(model, num_envs=8, episode_length=150):
-    """
-    Run test episodes and return rewards.
-    """
+def run_test_episodes(model, device, num_envs=8, episode_length=150):
     venv = heist.create_venv(
         num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
     )
@@ -390,6 +354,7 @@ def train_sae(
     model_activations,
     layer_number,
     layer_name,
+    device,
     batch_size=128,
     steps=200,
     lr=1e-3,
@@ -400,51 +365,51 @@ def train_sae(
     stats_dir="global_stats",
     wandb_project="SAE_training",
 ):
-    """
-    Train a Sparse Autoencoder (SAE) for a specific layer.
-    """
     layer_identifier = f"layer_{layer_number}_{layer_name}"
     layer_checkpoint_dir = os.path.join(checkpoint_dir, layer_identifier)
     os.makedirs(layer_checkpoint_dir, exist_ok=True)
 
     latest_checkpoint, latest_step = find_latest_checkpoint(layer_checkpoint_dir)
     if latest_checkpoint:
-        print(f"Resuming from checkpoint: {latest_checkpoint}")
+        if xm.is_master_ordinal():
+            print(f"Resuming from checkpoint: {latest_checkpoint}")
         checkpoint = t.load(latest_checkpoint, map_location=device)
         sae.load_state_dict(checkpoint["model_state_dict"])
         optimizer = optim.Adam(sae.parameters(), lr=lr)
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_step = checkpoint["step"] + 1
-        wandb.init(
-            project=wandb_project,
-            resume="allow",
-            config={
-                "batch_size": batch_size,
-                "steps": steps,
-                "lr": lr,
-                "num_envs": num_envs,
-                "episode_length": episode_length,
-                "layer_number": layer_number,
-                "resume_step": latest_step,
-                "layer_identifier": layer_identifier,
-            },
-            name=f"SAE_{layer_identifier}",
-        )
+        if xm.is_master_ordinal():
+            wandb.init(
+                project=wandb_project,
+                resume="allow",
+                config={
+                    "batch_size": batch_size,
+                    "steps": steps,
+                    "lr": lr,
+                    "num_envs": num_envs,
+                    "episode_length": episode_length,
+                    "layer_number": layer_number,
+                    "resume_step": latest_step,
+                    "layer_identifier": layer_identifier,
+                },
+                name=f"SAE_{layer_identifier}",
+            )
     else:
         optimizer = optim.Adam(sae.parameters(), lr=lr)
-        wandb.init(
-            project=wandb_project,
-            config={
-                "batch_size": batch_size,
-                "steps": steps,
-                "lr": lr,
-                "num_envs": num_envs,
-                "episode_length": episode_length,
-                "layer_number": layer_number,
-                "layer_identifier": layer_identifier,
-            },
-            name=f"SAE_{layer_identifier}",
-        )
+        if xm.is_master_ordinal():
+            wandb.init(
+                project=wandb_project,
+                config={
+                    "batch_size": batch_size,
+                    "steps": steps,
+                    "lr": lr,
+                    "num_envs": num_envs,
+                    "episode_length": episode_length,
+                    "layer_number": layer_number,
+                    "layer_identifier": layer_identifier,
+                },
+                name=f"SAE_{layer_identifier}",
+            )
         start_step = 0
 
     module_at_layer = get_module_by_path(model, layer_name)
@@ -454,6 +419,7 @@ def train_sae(
             model,
             model_activations,
             layer_number,
+            device,
             batch_size=batch_size,
             num_envs=num_envs,
             episode_length=episode_length,
@@ -471,14 +437,16 @@ def train_sae(
         device=device,
     )
 
-    progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
+    if xm.is_master_ordinal():
+        progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
+    else:
+        progress_bar = range(start_step, steps)
     loss_history = []
     L_reconstruction_history = []
     L_sparsity_history = []
     variance_explained_history = []
 
     model.eval()
-    active_logits_histogram = None
     for step in progress_bar:
         if step % 50 == 0:
             collect_activations_into_replay_buffer(
@@ -486,6 +454,7 @@ def train_sae(
                 model_activations,
                 layer_number,
                 replay_buffer,
+                device,
                 num_envs=num_envs,
                 episode_length=episode_length,
             )
@@ -494,14 +463,16 @@ def train_sae(
             buffer_mean = t.mean(all_activations, dim=0)
             buffer_std = t.std(all_activations, dim=0)
 
-            print(
-                f"Replay Buffer Stats - Mean: {buffer_mean.mean().item():.4f}, Std: {buffer_std.mean().item():.4f}"
-            )
+            if xm.is_master_ordinal():
+                print(
+                    f"Replay Buffer Stats - Mean: {buffer_mean.mean().item():.4f}, Std: {buffer_std.mean().item():.4f}"
+                )
 
         try:
             activations_unflattened, observations = replay_buffer.sample(batch_size)
         except Exception as e:
-            print(f"Error during activation sampling: {e}")
+            if xm.is_master_ordinal():
+                print(f"Error during activation sampling: {e}")
             continue
 
         activations_unflattened = (activations_unflattened - buffer_mean) / (
@@ -517,9 +488,11 @@ def train_sae(
 
         batch_size_curr = h_reconstructed.size(0)
 
-        h_reconstructed_reshaped = h_reconstructed.view(
-            batch_size_curr, *activation_shape
-        )
+        buffer_std = buffer_std.view(1, 32, 16, 16)
+        buffer_mean = buffer_mean.view(1, 32, 16, 16)
+
+        h_reconstructed = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+
         h_reconstructed = h_reconstructed * buffer_std + buffer_mean
 
         observations_prepared = einops.rearrange(observations, "b h w c -> b c h w")
@@ -534,7 +507,7 @@ def train_sae(
             )
 
         def replace_activation_hook(module, input, output):
-            return h_reconstructed_reshaped
+            return h_reconstructed.to(device)
 
         hook_handle = module_at_layer.register_forward_hook(replace_activation_hook)
         outputs_reconstructed = model(observations_prepared)
@@ -555,11 +528,18 @@ def train_sae(
         total_loss = 10 * logits_diff + L_reconstruction
 
         total_loss.backward()
-        optimizer.step()
+        xm.optimizer_step(optimizer, barrier=True)
+        xm.mark_step()
 
         with t.no_grad():
-            numerator = t.sum((activations - h_reconstructed) ** 2, dim=1)
-            denominator = t.sum(activations**2, dim=1)
+            activations_reshaped = activations.view(batch_size_curr, 32, 16, 16)
+            h_reconstructed_reshaped = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+            
+            activations_flat = activations_reshaped.view(batch_size_curr, -1)
+            h_reconstructed_flat = h_reconstructed_reshaped.view(batch_size_curr, -1)
+            
+            numerator = t.sum((activations_flat - h_reconstructed_flat) ** 2, dim=1)
+            denominator = t.sum(activations_flat**2, dim=1)
             variance_explained = 1 - numerator / (denominator + 1e-8)
             variance_explained = variance_explained.mean().item()
             acts_mean = acts.mean().item()
@@ -567,90 +547,93 @@ def train_sae(
             acts_max = acts.max().item()
 
         if step % log_freq == 0 or step == steps - 1:
-            progress_bar.set_postfix(
-                {
-                    "Loss": loss.item(),
-                    "total loss": total_loss.item(),
-                    "Reconstruction": L_reconstruction.item(),
-                    "Sparsity": L_sparsity.item(),
-                    "Variance Explained": variance_explained,
-                    "Logits diff": logits_diff,
-                }
-            )
-            loss_history.append(loss.item())
-            L_reconstruction_history.append(L_reconstruction.item())
-            L_sparsity_history.append(L_sparsity.item())
-            variance_explained_history.append(variance_explained)
-
-            wandb.log(
-                {
-                    "step": step,
-                    "loss": loss.item(),
-                    "total loss": total_loss.item(),
-                    "reconstruction_loss": L_reconstruction.item(),
-                    "sparsity_loss": L_sparsity.item(),
-                    "logits_diff": logits_diff.item(),
-                    "acts_mean": acts_mean,
-                    "acts_min": acts_min,
-                    "acts_max": acts_max,
-                    "variance_explained": variance_explained,
-                },
-                step=step,
-            )
-
-            if step % 1000 == 0:
-                import matplotlib.pyplot as plt
-
-                logit_differences = logits_reconstructed - logits_original
-                plt.figure(figsize=(10, 6))
-                plt.hist(logit_differences.flatten().cpu().detach().numpy(), bins=50)
-                plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
-                plt.xlabel("Logit Difference")
-                plt.ylabel("Frequency")
-
-                buf = io.BytesIO()
-                plt.savefig(buf, format="png")
-                buf.seek(0)
-                img = Image.open(buf)
-
-                rewards_without_sae = run_test_episodes(
-                    model, num_envs=8, episode_length=150
+            if xm.is_master_ordinal():
+                progress_bar.set_postfix(
+                    {
+                        "Loss": loss.item(),
+                        "total loss": total_loss.item(),
+                        "Reconstruction": L_reconstruction.item(),
+                        "Sparsity": L_sparsity.item(),
+                        "Variance Explained": variance_explained,
+                        "Logits diff": logits_diff,
+                    }
                 )
-
-                handle = replace_layer_with_sae(model, sae, layer_number)
-
-                rewards_with_sae = run_test_episodes(
-                    model, num_envs=8, episode_length=50
-                )
-                avg_reward_with_sae = sum(rewards_with_sae) / len(rewards_with_sae)
-
-                handle.remove()
+                loss_history.append(loss.item())
+                L_reconstruction_history.append(L_reconstruction.item())
+                L_sparsity_history.append(L_sparsity.item())
+                variance_explained_history.append(variance_explained)
 
                 wandb.log(
                     {
-                        "logit_differences_histogram": wandb.Image(img),
-                        "avg_reward_with_sae": avg_reward_with_sae,
+                        "step": step,
+                        "loss": loss.item(),
+                        "total loss": total_loss.item(),
+                        "reconstruction_loss": L_reconstruction.item(),
+                        "sparsity_loss": L_sparsity.item(),
+                        "logits_diff": logits_diff.item(),
+                        "acts_mean": acts_mean,
+                        "acts_min": acts_min,
+                        "acts_max": acts_max,
+                        "variance_explained": variance_explained,
                     },
                     step=step,
                 )
 
-                plt.close()
+                if step % 1000 == 0:
+                    import matplotlib.pyplot as plt
+
+                    logit_differences = logits_reconstructed - logits_original
+                    plt.figure(figsize=(10, 6))
+                    plt.hist(logit_differences.flatten().cpu().detach().numpy(), bins=50)
+                    plt.title(f"Histogram of Logit Differences (Layer {layer_number})")
+                    plt.xlabel("Logit Difference")
+                    plt.ylabel("Frequency")
+
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format="png")
+                    buf.seek(0)
+                    img = Image.open(buf)
+
+                    rewards_without_sae = run_test_episodes(
+                        model, device, num_envs=8, episode_length=150
+                    )
+
+                    handle = replace_layer_with_sae(model, sae, layer_number)
+
+                    rewards_with_sae = run_test_episodes(
+                        model, device, num_envs=8, episode_length=50
+                    )
+                    avg_reward_with_sae = sum(rewards_with_sae) / len(rewards_with_sae)
+
+                    handle.remove()
+
+                    wandb.log(
+                        {
+                            "logit_differences_histogram": wandb.Image(img),
+                            "avg_reward_with_sae": avg_reward_with_sae,
+                        },
+                        step=step,
+                    )
+
+                    plt.close()
 
         if (step + 1) % 10000 == 0 and step > 1 or step == steps - 1:
-            checkpoint_path = os.path.join(
-                layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt"
-            )
-            t.save(
-                {
-                    "step": step,
-                    "model_state_dict": sae.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": loss.item(),
-                },
-                checkpoint_path,
-            )
+            if xm.is_master_ordinal():
+                checkpoint_path = os.path.join(
+                    layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt"
+                )
+                t.save(
+                    {
+                        "step": step,
+                        "model_state_dict": sae.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "loss": loss.item(),
+                    },
+                    checkpoint_path,
+                )
 
-    wandb.finish()
+    if xm.is_master_ordinal():
+        wandb.finish()
     return (
         loss_history,
         L_reconstruction_history,
@@ -658,38 +641,53 @@ def train_sae(
         variance_explained_history,
     )
 
-
-def load_interpretable_model(model_path="../model_interpretable.pt"):
+def load_interpretable_model(model_path="../model_interpretable.pt", device=None):
     import gym
     from src.interpretable_impala import CustomCNN
 
-    env_name = "procgen:procgen-heist-v0"
-    env = gym.make(
-        env_name,
-        start_level=100,
-        num_levels=200,
-        render_mode="rgb_array",
-        distribution_mode="easy",
-    )
-    observation_space = env.observation_space
-    action_space = env.action_space.n
-    model = CustomCNN(observation_space, action_space)
-    model.load_from_file(model_path, device=device)
-    return model
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
 
+    try:
+        env_name = "procgen:procgen-heist-v0"
+        env = gym.make(
+            env_name,
+            start_level=100,
+            num_levels=200,
+            render_mode="rgb_array",
+            distribution_mode="easy",
+        )
+        observation_space = env.observation_space
+        action_space = env.action_space.n
+        
+        model = CustomCNN(observation_space, action_space)
+        
+        try:
+            state_dict = t.load(model_path, map_location='cpu')
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model state dict: {str(e)}")
+        
+        model = model.to(device)
+        is_tpu = str(device).startswith('xla')
+        if is_tpu:
+            state_dict = {k: v.to(device) for k, v in state_dict.items()}
+        
+        model.load_state_dict(state_dict)
+        
+        return model
+    finally:
+        env.close()
 
 def compute_and_save_global_stats(
     model,
     layer_number,
     layer_name,
+    device,
     num_samples=10000,
     batch_size=128,
     num_envs=64,
     save_dir="global_stats",
 ):
-    """
-    Computes and saves the global mean and std for a given layer's activations.
-    """
     os.makedirs(save_dir, exist_ok=True)
     layer_paths = [layer_name]
     model_activations = helpers.ModelActivations(model)
@@ -703,6 +701,7 @@ def compute_and_save_global_stats(
                 model,
                 model_activations,
                 layer_number,
+                device,
                 batch_size=batch_size,
                 num_envs=num_envs,
             )
@@ -718,10 +717,10 @@ def compute_and_save_global_stats(
     )
     model_activations.clear_hooks()
 
-
 def compute_global_stats_for_all_layers(
     model,
     ordered_layer_names,
+    device,
     num_samples_per_layer=10000,
     batch_size=128,
     num_envs=128,
@@ -732,17 +731,18 @@ def compute_global_stats_for_all_layers(
             model,
             layer_number,
             layer_name,
+            device,
             num_samples=num_samples_per_layer,
             batch_size=batch_size,
             num_envs=num_envs,
             save_dir=save_dir,
         )
 
-
 def train_all_layers(
     model,
     ordered_layer_names,
     layer_types,
+    device,
     checkpoint_dir="checkpoints",
     stats_dir="global_stats",
     wandb_project="SAE_training",
@@ -754,7 +754,8 @@ def train_all_layers(
     log_freq=10,
 ):
     for layer_number, layer_name in ordered_layer_names.items():
-        print(f"\n=== Training SAE for Layer {layer_number}: {layer_name} ===")
+        if xm.is_master_ordinal():
+            print(f"\n=== Training SAE for Layer {layer_number}: {layer_name} ===")
 
         hyperparams = get_layer_hyperparameters(layer_name, layer_types)
         d_hidden = hyperparams["d_hidden"]
@@ -768,21 +769,25 @@ def train_all_layers(
             model,
             model_activations,
             layer_number,
+            device,
             batch_size=batch_size,
             num_envs=num_envs,
             episode_length=episode_length,
         )
-        print("initial size:", sample_activations.shape[-1])
+        if xm.is_master_ordinal():
+            print("initial size:", sample_activations.shape[-1])
 
-        print(f"sample_activations shape before flattening: {sample_activations.shape}")
+            print(f"sample_activations shape before flattening: {sample_activations.shape}")
         flattened_sample_activations = sample_activations.view(
             sample_activations.size(0), -1
         )
-        print(
-            f"flattened_sample_activations shape: {flattened_sample_activations.shape}"
-        )
+        if xm.is_master_ordinal():
+            print(
+                f"flattened_sample_activations shape: {flattened_sample_activations.shape}"
+            )
         d_in = flattened_sample_activations.shape[1]
-        print(f"d_in: {d_in}")
+        if xm.is_master_ordinal():
+            print(f"d_in: {d_in}")
         sae_cfg = SAEConfig(
             d_in=d_in,
             d_hidden=d_hidden,
@@ -790,7 +795,7 @@ def train_all_layers(
             tied_weights=False,
         )
 
-        sae_model = SAE(sae_cfg)
+        sae_model = SAE(sae_cfg, device)
 
         (
             loss_history,
@@ -803,6 +808,7 @@ def train_all_layers(
             model_activations=model_activations,
             layer_number=layer_number,
             layer_name=layer_name,
+            device=device,
             batch_size=batch_size,
             steps=steps_per_layer,
             lr=lr,
@@ -814,22 +820,64 @@ def train_all_layers(
             wandb_project=wandb_project,
         )
 
-        import matplotlib.pyplot as plt
+        if xm.is_master_ordinal():
+            import matplotlib.pyplot as plt
 
-        plt.figure(figsize=(12, 4))
-        plt.subplot(1, 3, 1)
-        plt.plot(loss_history)
-        plt.title(f"Layer {layer_number} Total Loss")
+            plt.figure(figsize=(12, 4))
+            plt.subplot(1, 3, 1)
+            plt.plot(loss_history)
+            plt.title(f"Layer {layer_number} Total Loss")
 
-        plt.subplot(1, 3, 2)
-        plt.plot(L_reconstruction_history)
-        plt.title(f"Layer {layer_number} Reconstruction Loss")
+            plt.subplot(1, 3, 2)
+            plt.plot(L_reconstruction_history)
+            plt.title(f"Layer {layer_number} Reconstruction Loss")
 
-        plt.subplot(1, 3, 3)
-        plt.plot(L_sparsity_history)
-        plt.title(f"Layer {layer_number} Sparsity Loss")
+            plt.subplot(1, 3, 3)
+            plt.plot(L_sparsity_history)
+            plt.title(f"Layer {layer_number} Sparsity Loss")
 
-        plt.tight_layout()
-        plt.show()
+            plt.tight_layout()
+            plt.show()
 
         model_activations.clear_hooks()
+
+def _mp_fn(rank, flags):
+    device = xm.xla_device()
+    t.manual_seed(42)
+    random.seed(42)
+    np.random.seed(42)
+    xu.setup_default_logging()
+    model = load_interpretable_model(model_path="../model_interpretable.pt", device=device)
+    model.to(device)
+
+    # Optionally compute global stats
+    # compute_global_stats_for_all_layers(
+    #     model,
+    #     ordered_layer_names,
+    #     device=device,
+    #     num_samples_per_layer=10000,
+    #     batch_size=128,
+    #     num_envs=128,
+    #     save_dir="global_stats",
+    # )
+
+
+    train_all_layers(
+        model=model,
+        ordered_layer_names=ordered_layer_names,
+        layer_types=layer_types,
+        device=device,
+        checkpoint_dir="checkpoints",
+        stats_dir="global_stats",
+        wandb_project="SAE_training",
+        steps_per_layer=1000,
+        batch_size=64,
+        lr=1e-3,
+        num_envs=128,
+        episode_length=150,
+        log_freq=10,
+    )
+
+if __name__ == '__main__':
+    FLAGS = {}
+    xmp.spawn(_mp_fn, args=(FLAGS,), nprocs=8, start_method='spawn')
