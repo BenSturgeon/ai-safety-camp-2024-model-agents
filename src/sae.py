@@ -98,6 +98,12 @@ class ReplayBuffer:
     def is_full(self):
         return self.size >= self.capacity
 
+    def empty(self):
+        self.size = 0
+        self.position = 0
+        self.activations = t.empty((self.capacity, *self.activation_shape), device=self.device)
+        self.observations = t.empty((self.capacity, *self.observation_shape), device=self.device)
+
 def jump_relu(x, jump_value=0.1):
     """
     Applies a jump ReLU activation function.
@@ -482,6 +488,7 @@ def train_sae(
     active_logits_histogram = None
     for step in progress_bar:
         if step % 50 == 0:
+            replay_buffer.empty()
             collect_activations_into_replay_buffer(
                 model,
                 model_activations,
