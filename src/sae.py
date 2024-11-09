@@ -1,4 +1,3 @@
-
 # sae.py
 import io
 import os
@@ -160,6 +159,8 @@ class SAE(nn.Module):
 
     def forward(self, h):
         h = h.to(self.device)
+        print(f"Input h shape: {h.shape}")
+        print(f"W_enc shape: {self.W_enc.shape}")
         z = t.matmul(h, self.W_enc) + self.b_enc
         acts = F.relu(z)
 
@@ -258,12 +259,11 @@ def generate_batch_activations_parallel(
     venv = heist.create_venv(
         num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
     )
+    obs = venv.reset()
 
     activation_buffer = []
     obs_buffer = []
-    activation_shapes = None
 
-    obs = venv.reset()
     steps = 0
 
     while len(activation_buffer) * num_envs < batch_size:
@@ -302,7 +302,7 @@ def generate_batch_activations_parallel(
 
     observations_tensor = t.cat(obs_buffer, dim=0)[:batch_size]
 
-    return activations_tensor, observations_tensor, activation_shapes
+    return activations_tensor, observations_tensor, None
 
 def find_latest_checkpoint(checkpoint_dir):
     """
@@ -397,6 +397,7 @@ def train_sae(
     model_activations,
     layer_number,
     layer_name,
+    ordered_layer_names, 
     batch_size=128,
     steps=200,
     lr=1e-3,
@@ -478,6 +479,14 @@ def train_sae(
         device=device,
     )
 
+
+    downstream_layer_numbers = [
+        n for n in ordered_layer_names if n > layer_number
+    ]
+    downstream_layer_names = [
+        ordered_layer_names[n] for n in downstream_layer_numbers
+    ]
+
     progress_bar = tqdm(range(start_step, steps), desc=f"Training {layer_identifier}")
     loss_history = []
     L_reconstruction_history = []
@@ -488,7 +497,7 @@ def train_sae(
     active_logits_histogram = None
     for step in progress_bar:
         if step % 50 == 0:
-            replay_buffer.empty()
+
             collect_activations_into_replay_buffer(
                 model,
                 model_activations,
@@ -515,8 +524,18 @@ def train_sae(
         activations_unflattened = (activations_unflattened - buffer_mean) / (
             buffer_std + 1e-8
         )
+        print(f"unflattened activations  = {activations_unflattened.shape}")
 
-        activations = activations_unflattened.view(batch_size, -1).to(device)
+        if len(activations_unflattened.shape) > 2:
+
+            # For conv layers: flatten
+            activations = activations_unflattened.view(batch_size, -1).to(device)
+        else:
+            # For fc layers: do not flatten
+            activations = activations_unflattened.to(device)
+
+        print(f"Activations unflattened shape: {activations_unflattened.shape}")
+        print(f"Activations shape after processing: {activations.shape}")
 
         observations = observations.to(device)
 
@@ -525,28 +544,63 @@ def train_sae(
 
         batch_size_curr = h_reconstructed.size(0)
 
-        buffer_std = buffer_std.view(1, 32, 16, 16)
-        buffer_mean = buffer_mean.view(1, 32, 16, 16)
+        buffer_std = buffer_std.view(1, *activation_shape)
+        buffer_mean = buffer_mean.view(1, *activation_shape)
 
-        h_reconstructed = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+        h_reconstructed = h_reconstructed.view(batch_size_curr, *activation_shape)
 
         h_reconstructed = h_reconstructed * buffer_std + buffer_mean
 
         observations_prepared = einops.rearrange(observations, "b h w c -> b c h w")
 
+
+        activations_original = {}
+
+        def get_activation_original(name):
+            def hook(model, input, output):
+                activations_original[name] = output.detach()
+            return hook
+
+        handles_original = []
+        for name in downstream_layer_names:
+            module = get_module_by_path(model, name)
+            handle = module.register_forward_hook(get_activation_original(name))
+            handles_original.append(handle)
+
         with t.no_grad():
-            model.eval()
-            outputs_original = model(observations_prepared)
+            outputs_original = model(observations_prepared) 
             logits_original = (
                 outputs_original[0].logits
                 if isinstance(outputs_original, tuple)
                 else outputs_original.logits
             )
 
+
+        # Remove original hooks
+        for handle in handles_original:
+            handle.remove()
+
+
+        activations_reconstructed = {}
+
+        def get_activation_reconstructed(name):
+            def hook(model, input, output):
+                activations_reconstructed[name] = output
+            return hook
+
+
         def replace_activation_hook(module, input, output):
             return h_reconstructed
 
         hook_handle = module_at_layer.register_forward_hook(replace_activation_hook)
+
+        # Register hooks for downstream layers
+        handles_reconstructed = []
+        for name in downstream_layer_names:
+            module = get_module_by_path(model, name)
+            handle = module.register_forward_hook(get_activation_reconstructed(name))
+            handles_reconstructed.append(handle)
+
         outputs_reconstructed = model(observations_prepared)
         logits_reconstructed = (
             outputs_reconstructed[0].logits
@@ -554,7 +608,11 @@ def train_sae(
             else outputs_reconstructed.logits
         )
         hook_handle.remove()
+        for handle in handles_reconstructed:
+            handle.remove()
 
+        # **Compute Losses**
+        # KL Divergence Loss
         logits_diff = F.kl_div(
             F.log_softmax(logits_reconstructed, dim=-1),
             F.log_softmax(logits_original, dim=-1),
@@ -562,14 +620,25 @@ def train_sae(
             log_target=True,
         )
 
-        total_loss = 10 * logits_diff + L_reconstruction
+        # Reconstruction Loss from Downstream Layers
+        total_reconstruction_loss = 0.0
+        for name in downstream_layer_names:
+            activation_orig = activations_original[name]
+            activation_recon = activations_reconstructed[name]
+            reconstruction_loss = F.mse_loss(
+                activation_recon, activation_orig, reduction="mean"
+            )
+            total_reconstruction_loss += reconstruction_loss
+
+
+        total_loss = logits_diff + total_reconstruction_loss + loss 
 
         total_loss.backward()
         optimizer.step()
 
         with t.no_grad():
-            activations_reshaped = activations.view(batch_size_curr, 32, 16, 16)
-            h_reconstructed_reshaped = h_reconstructed.view(batch_size_curr, 32, 16, 16)
+            activations_reshaped = activations.view(batch_size_curr, *activation_shape)
+            h_reconstructed_reshaped = h_reconstructed.view(batch_size_curr, *activation_shape)
             
             activations_flat = activations_reshaped.view(batch_size_curr, -1)
             h_reconstructed_flat = h_reconstructed_reshaped.view(batch_size_curr, -1)
@@ -586,11 +655,12 @@ def train_sae(
             progress_bar.set_postfix(
                 {
                     "Loss": loss.item(),
-                    "total loss": total_loss.item(),
+                    "Total Loss": total_loss.item(),
                     "Reconstruction": L_reconstruction.item(),
                     "Sparsity": L_sparsity.item(),
                     "Variance Explained": variance_explained,
-                    "Logits diff": logits_diff,
+                    "Logits diff": logits_diff.item(),
+                    "Downstream Recon Loss": total_reconstruction_loss,  
                 }
             )
             loss_history.append(loss.item())
@@ -602,10 +672,11 @@ def train_sae(
                 {
                     "step": step,
                     "loss": loss.item(),
-                    "total loss": total_loss.item(),
+                    "total_loss": total_loss.item(),
                     "reconstruction_loss": L_reconstruction.item(),
                     "sparsity_loss": L_sparsity.item(),
                     "logits_diff": logits_diff.item(),
+                    "downstream_recon_loss": total_reconstruction_loss,  
                     "acts_mean": acts_mean,
                     "acts_min": acts_min,
                     "acts_max": acts_max,
@@ -674,7 +745,6 @@ def train_sae(
         variance_explained_history,
     )
 
-
 def load_interpretable_model(model_path="../model_interpretable.pt"):
     import gym
     from src.interpretable_impala import CustomCNN
@@ -692,7 +762,6 @@ def load_interpretable_model(model_path="../model_interpretable.pt"):
     model = CustomCNN(observation_space, action_space)
     model.load_from_file(model_path, device=device)
     return model
-
 
 def compute_and_save_global_stats(
     model,
@@ -734,7 +803,6 @@ def compute_and_save_global_stats(
     )
     model_activations.clear_hooks()
 
-
 def compute_global_stats_for_all_layers(
     model,
     ordered_layer_names,
@@ -753,7 +821,6 @@ def compute_global_stats_for_all_layers(
             num_envs=num_envs,
             save_dir=save_dir,
         )
-
 
 def train_all_layers(
     model,
@@ -799,6 +866,8 @@ def train_all_layers(
         )
         d_in = flattened_sample_activations.shape[1]
         print(f"d_in: {d_in}")
+        print(f"sample_activations shape before flattening: {sample_activations.shape}")
+
         sae_cfg = SAEConfig(
             d_in=d_in,
             d_hidden=d_hidden,
@@ -819,6 +888,7 @@ def train_all_layers(
             model_activations=model_activations,
             layer_number=layer_number,
             layer_name=layer_name,
+            ordered_layer_names=ordered_layer_names,  # MODIFIED: Pass this parameter
             batch_size=batch_size,
             steps=steps_per_layer,
             lr=lr,
