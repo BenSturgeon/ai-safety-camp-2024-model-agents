@@ -79,19 +79,26 @@ class ReplayBuffer:
         self.size = 0
         self.position = 0  
 
-    def add(self, activation, observation):
-        self.activations[self.position] = activation.to(self.device)
-        self.observations[self.position] = observation.to(self.device)
+    def add(self, activations, observations):
+        self.activations[self.position] = activations.to(self.device)
+        self.observations[self.position] = observations.to(self.device)
+        
         self.position = (self.position + 1) % self.capacity
-        if self.size < self.capacity:
-            self.size += 1
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size):
-        if self.size < batch_size:
-            raise ValueError("Not enough samples in the replay buffer to sample.")
-        indices = random.sample(range(self.size), batch_size)
+        if self.size == 0:
+            raise ValueError("Cannot sample from an empty buffer")
+        
+        indices = np.random.choice(
+            self.size, 
+            batch_size,
+            replace=True
+        )
+        
         sampled_activations = self.activations[indices]
         sampled_observations = self.observations[indices]
+        
         return sampled_activations, sampled_observations
 
     def is_full(self):
@@ -102,6 +109,7 @@ class ReplayBuffer:
         self.position = 0
         self.activations = t.empty((self.capacity, *self.activation_shape), device=self.device)
         self.observations = t.empty((self.capacity, *self.observation_shape), device=self.device)
+
 
 def jump_relu(x, jump_value=0.1):
     """
@@ -159,8 +167,6 @@ class SAE(nn.Module):
 
     def forward(self, h):
         h = h.to(self.device)
-        print(f"Input h shape: {h.shape}")
-        print(f"W_enc shape: {self.W_enc.shape}")
         z = t.matmul(h, self.W_enc) + self.b_enc
         acts = F.relu(z)
 
@@ -168,9 +174,9 @@ class SAE(nn.Module):
 
         L_reconstruction = F.mse_loss(h_reconstructed, h, reduction="mean")
         L_sparsity = acts.abs().mean()
-        loss = self.cfg.l1_coeff * L_sparsity
+        sparsity_loss = self.cfg.l1_coeff * L_sparsity
 
-        return loss, L_reconstruction, L_sparsity, acts, h_reconstructed
+        return sparsity_loss, L_reconstruction, L_sparsity, acts, h_reconstructed
 
 def collect_activations_into_replay_buffer(
     model,
@@ -327,7 +333,8 @@ def get_layer_hyperparameters(layer_name, layer_types):
     """
     Function to assign hyperparameters based on layer type.
     """
-    layer_type = layer_types.get(layer_name, "other")
+    print(layer_types)
+    layer_type = layer_types[layer_name] if layer_name in layer_types else "other"
     if layer_type == "conv":
         return {
             "d_hidden": 16384,
@@ -366,8 +373,13 @@ def run_test_episodes(model, num_envs=8, episode_length=150):
     venv = heist.create_venv(
         num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
     )
+    total_reward, frames, observations = helpers.run_episode_and_save_as_gif(venv, model, filepath=f'episode_mod_2_.gif', save_gif=False,episode_timeout=150, is_procgen_env=True)
+    return total_reward
+    venv = heist.create_venv(
+        num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
+    )
     obs = venv.reset()
-    total_rewards = np.zeros(num_envs)
+    total_rewards = 0
     steps = np.zeros(num_envs, dtype=int)
 
     while np.any(steps < episode_length):
@@ -495,8 +507,17 @@ def train_sae(
 
     model.eval()
     active_logits_histogram = None
+    while not replay_buffer.size > replay_buffer.capacity *0.2:
+        collect_activations_into_replay_buffer(
+            model,
+            model_activations,
+            layer_number,
+            replay_buffer,
+            num_envs=num_envs,
+            episode_length=episode_length,
+        )
     for step in progress_bar:
-        if step % 50 == 0:
+        if step % 250 == 0:
 
             collect_activations_into_replay_buffer(
                 model,
@@ -511,9 +532,6 @@ def train_sae(
             buffer_mean = t.mean(all_activations, dim=0)
             buffer_std = t.std(all_activations, dim=0)
 
-            print(
-                f"Replay Buffer Stats - Mean: {buffer_mean.mean().item():.4f}, Std: {buffer_std.mean().item():.4f}"
-            )
 
         try:
             activations_unflattened, observations = replay_buffer.sample(batch_size)
@@ -524,7 +542,6 @@ def train_sae(
         activations_unflattened = (activations_unflattened - buffer_mean) / (
             buffer_std + 1e-8
         )
-        print(f"unflattened activations  = {activations_unflattened.shape}")
 
         if len(activations_unflattened.shape) > 2:
 
@@ -534,13 +551,11 @@ def train_sae(
             # For fc layers: do not flatten
             activations = activations_unflattened.to(device)
 
-        print(f"Activations unflattened shape: {activations_unflattened.shape}")
-        print(f"Activations shape after processing: {activations.shape}")
-
+      
         observations = observations.to(device)
 
         optimizer.zero_grad()
-        loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(activations)
+        sparsity_loss, L_reconstruction, L_sparsity, acts, h_reconstructed = sae(activations)
 
         batch_size_curr = h_reconstructed.size(0)
 
@@ -611,16 +626,25 @@ def train_sae(
         for handle in handles_reconstructed:
             handle.remove()
 
-        # **Compute Losses**
-        # KL Divergence Loss
-        logits_diff = F.kl_div(
-            F.log_softmax(logits_reconstructed, dim=-1),
-            F.log_softmax(logits_original, dim=-1),
-            reduction="batchmean",
-            log_target=True,
+
+        # # KL Divergence Loss of the logits
+        # logits_diff = F.kl_div(
+        #     F.log_softmax(logits_reconstructed, dim=-1),
+        #     F.log_softmax(logits_original, dim=-1),
+        #     reduction="batchmean",
+        #     log_target=True,
+        # )
+
+
+        probs_original = F.softmax(logits_original, dim=-1)
+        probs_reconstructed = F.softmax(logits_reconstructed, dim=-1)
+
+        probs_diff = F.kl_div(
+            probs_reconstructed.log(),
+            probs_original,
+            reduction='batchmean'
         )
 
-        # Reconstruction Loss from Downstream Layers
         total_reconstruction_loss = 0.0
         for name in downstream_layer_names:
             activation_orig = activations_original[name]
@@ -631,7 +655,7 @@ def train_sae(
             total_reconstruction_loss += reconstruction_loss
 
 
-        total_loss = logits_diff + total_reconstruction_loss + loss 
+        total_loss = probs_diff + 0.1 * total_reconstruction_loss + 0.1 * L_sparsity 
 
         total_loss.backward()
         optimizer.step()
@@ -654,16 +678,16 @@ def train_sae(
         if step % log_freq == 0 or step == steps - 1:
             progress_bar.set_postfix(
                 {
-                    "Loss": loss.item(),
+                    "Loss": sparsity_loss.item(),
                     "Total Loss": total_loss.item(),
                     "Reconstruction": L_reconstruction.item(),
                     "Sparsity": L_sparsity.item(),
                     "Variance Explained": variance_explained,
-                    "Logits diff": logits_diff.item(),
+                    "probs_diff diff": probs_diff.item(),
                     "Downstream Recon Loss": total_reconstruction_loss,  
                 }
             )
-            loss_history.append(loss.item())
+            loss_history.append(sparsity_loss.item())
             L_reconstruction_history.append(L_reconstruction.item())
             L_sparsity_history.append(L_sparsity.item())
             variance_explained_history.append(variance_explained)
@@ -671,11 +695,12 @@ def train_sae(
             wandb.log(
                 {
                     "step": step,
-                    "loss": loss.item(),
+                    "loss": sparsity_loss.item(),
                     "total_loss": total_loss.item(),
+                    "total_reconstruction_loss": total_reconstruction_loss,
                     "reconstruction_loss": L_reconstruction.item(),
                     "sparsity_loss": L_sparsity.item(),
-                    "logits_diff": logits_diff.item(),
+                    "probs_diff": probs_diff.item(),
                     "downstream_recon_loss": total_reconstruction_loss,  
                     "acts_mean": acts_mean,
                     "acts_min": acts_min,
@@ -707,7 +732,7 @@ def train_sae(
                 handle = replace_layer_with_sae(model, sae, layer_number)
 
                 rewards_with_sae = run_test_episodes(
-                    model, num_envs=8, episode_length=50
+                    model, num_envs=8, episode_length=150
                 )
                 avg_reward_with_sae = sum(rewards_with_sae) / len(rewards_with_sae)
 
@@ -732,7 +757,7 @@ def train_sae(
                     "step": step,
                     "model_state_dict": sae.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": loss.item(),
+                    "loss": sparsity_loss.item(),
                 },
                 checkpoint_path,
             )
@@ -822,100 +847,100 @@ def compute_global_stats_for_all_layers(
             save_dir=save_dir,
         )
 
-def train_all_layers(
+def train_layer(
     model,
-    ordered_layer_names,
+    layer_name,
+    layer_number,
     layer_types,
     checkpoint_dir="checkpoints",
-    stats_dir="global_stats",
+    stats_dir="global_stats", 
     wandb_project="SAE_training",
-    steps_per_layer=1000,
+    steps=1000,
     batch_size=64,
     lr=1e-3,
     num_envs=128,
     episode_length=150,
     log_freq=10,
 ):
-    for layer_number, layer_name in ordered_layer_names.items():
-        print(f"\n=== Training SAE for Layer {layer_number}: {layer_name} ===")
+    print(f"\n=== Training SAE for Layer: {layer_name} ===")
+    print(layer_types)
+    hyperparams = get_layer_hyperparameters(layer_name, layer_types)
+    d_hidden = hyperparams["d_hidden"]
+    l1_coeff = hyperparams["l1_coeff"]
 
-        hyperparams = get_layer_hyperparameters(layer_name, layer_types)
-        d_hidden = hyperparams["d_hidden"]
-        l1_coeff = hyperparams["l1_coeff"]
+    layer_paths = [layer_name]
 
-        layer_paths = [layer_name]
+    model_activations = helpers.ModelActivations(model)
+    model.eval()
+    sample_activations, _, _ = generate_batch_activations_parallel(
+        model,
+        model_activations,
+        layer_number,
+        batch_size=batch_size,
+        num_envs=num_envs,
+        episode_length=episode_length,
+    )
+    print("initial size:", sample_activations.shape[-1])
 
-        model_activations = helpers.ModelActivations(model)
-        model.eval()
-        sample_activations, _, _ = generate_batch_activations_parallel(
-            model,
-            model_activations,
-            layer_number,
-            batch_size=batch_size,
-            num_envs=num_envs,
-            episode_length=episode_length,
-        )
-        print("initial size:", sample_activations.shape[-1])
+    print(f"sample_activations shape before flattening: {sample_activations.shape}")
+    flattened_sample_activations = sample_activations.view(
+        sample_activations.size(0), -1
+    )
+    print(
+        f"flattened_sample_activations shape: {flattened_sample_activations.shape}"
+    )
+    d_in = flattened_sample_activations.shape[1]
+    print(f"d_in: {d_in}")
+    print(f"sample_activations shape before flattening: {sample_activations.shape}")
 
-        print(f"sample_activations shape before flattening: {sample_activations.shape}")
-        flattened_sample_activations = sample_activations.view(
-            sample_activations.size(0), -1
-        )
-        print(
-            f"flattened_sample_activations shape: {flattened_sample_activations.shape}"
-        )
-        d_in = flattened_sample_activations.shape[1]
-        print(f"d_in: {d_in}")
-        print(f"sample_activations shape before flattening: {sample_activations.shape}")
+    sae_cfg = SAEConfig(
+        d_in=d_in,
+        d_hidden=d_hidden,
+        l1_coeff=l1_coeff,
+        tied_weights=False,
+    )
 
-        sae_cfg = SAEConfig(
-            d_in=d_in,
-            d_hidden=d_hidden,
-            l1_coeff=l1_coeff,
-            tied_weights=False,
-        )
+    sae_model = SAE(sae_cfg, device)
 
-        sae_model = SAE(sae_cfg, device)
+    (
+        loss_history,
+        L_reconstruction_history,
+        L_sparsity_history,
+        variance_explained_history,
+    ) = train_sae(
+        sae=sae_model,
+        model=model,
+        model_activations=model_activations,
+        layer_number=layer_number,
+        layer_name=layer_name,
+        ordered_layer_names=ordered_layer_names,
+        batch_size=batch_size,
+        steps=steps,
+        lr=lr,
+        num_envs=num_envs,
+        episode_length=episode_length,
+        log_freq=log_freq,
+        checkpoint_dir=checkpoint_dir,
+        stats_dir=stats_dir,
+        wandb_project=wandb_project,
+    )
 
-        (
-            loss_history,
-            L_reconstruction_history,
-            L_sparsity_history,
-            variance_explained_history,
-        ) = train_sae(
-            sae=sae_model,
-            model=model,
-            model_activations=model_activations,
-            layer_number=layer_number,
-            layer_name=layer_name,
-            ordered_layer_names=ordered_layer_names,  # MODIFIED: Pass this parameter
-            batch_size=batch_size,
-            steps=steps_per_layer,
-            lr=lr,
-            num_envs=num_envs,
-            episode_length=episode_length,
-            log_freq=log_freq,
-            checkpoint_dir=checkpoint_dir,
-            stats_dir=stats_dir,
-            wandb_project=wandb_project,
-        )
+    import matplotlib.pyplot as plt
 
-        import matplotlib.pyplot as plt
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
+    plt.plot(loss_history)
+    plt.title(f"Layer {layer_number} Total Loss")
 
-        plt.figure(figsize=(12, 4))
-        plt.subplot(1, 3, 1)
-        plt.plot(loss_history)
-        plt.title(f"Layer {layer_number} Total Loss")
+    plt.subplot(1, 3, 2)
+    plt.plot(L_reconstruction_history)
+    plt.title(f"Layer {layer_number} Reconstruction Loss")
 
-        plt.subplot(1, 3, 2)
-        plt.plot(L_reconstruction_history)
-        plt.title(f"Layer {layer_number} Reconstruction Loss")
+    plt.subplot(1, 3, 3)
+    plt.plot(L_sparsity_history)
+    plt.title(f"Layer {layer_number} Sparsity Loss")
 
-        plt.subplot(1, 3, 3)
-        plt.plot(L_sparsity_history)
-        plt.title(f"Layer {layer_number} Sparsity Loss")
+    plt.tight_layout()
+    plt.show()
 
-        plt.tight_layout()
-        plt.show()
-
-        model_activations.clear_hooks()
+    model_activations.clear_hooks()

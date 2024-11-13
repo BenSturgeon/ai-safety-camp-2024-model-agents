@@ -84,14 +84,14 @@ ordered_layer_names = {
     # 3: 'conv2a',
     # 4: 'conv2b',
     # 5: 'pool2',
-    6: "conv3a",
+    # 6: "conv3a",
     # 7: 'pool3',
     # 8: 'conv4a',
     # 9: 'pool4',
-    # 10: 'fc1',
-    # 11: 'fc2',
-    # 12: 'fc3',
-    # 13: 'value_fc',
+    10: 'fc1',
+    11: 'fc2',
+    12: 'fc3',
+    13: 'value_fc',
     # 14: 'dropout_conv',
     # 15: 'dropout_fc'
 }
@@ -146,16 +146,19 @@ ordered_layer_names = {
 #     save_dir="global_stats",
 # )
 # %%
-sae.train_all_layers(
+layer_number = 10
+layer_name = ordered_layer_names[layer_number]
+sae.train_layer(
     model,
-    ordered_layer_names,
+    layer_name,
+    layer_number,
     layer_types,
     checkpoint_dir="checkpoints",
     stats_dir="global_stats",
     wandb_project="SAE_training",
-    steps_per_layer=200000,
-    batch_size=64,
-    lr=1e-5,
+    steps=210050,
+    batch_size=128,
+    lr=1e-4,
     num_envs=8,
     episode_length=150,
     log_freq=100,
