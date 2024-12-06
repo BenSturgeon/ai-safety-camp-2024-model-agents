@@ -1,36 +1,135 @@
 # AI Safety Camp - Model Agents
+
 Research on how to both identify optimization targets in model agents, and how to robustly influence agent behavior based on modifying those targets.
 
-## Setup
-Install dependencies using poetry:
+## Prerequisites
+- Python 3.9 (specific version required)
+- Qt5 (for macOS users)
+- Git
+
+## Installation Options
+
+### Option 1: Using uv (Recommended for Speed)
 ```bash
+# Install uv if you haven't already
+pip install uv
+
+# Create virtual environment with Python 3.9
+uv venv --python=3.9
+
+# Activate the environment
+source .venv/bin/activate
+
+# Install dependencies
+uv pip install -r requirements.txt
+
+# Install procgen from source (required)
+git clone https://github.com/openai/procgen.git
+cd procgen
+git checkout 1d6dcd9f8ac5544c0f99d3b82c3a5ecb27e481f6  # version 0.10.7
+python -m pip install -e .
+
+# Install procgen-tools
+python -m pip install git+https://github.com/UlisseMini/procgen-tools.git
+```
+
+### Option 2: Using poetry
+```bash
+# Install poetry if you haven't already
+pip install poetry
+
+# Configure poetry to use Python 3.9
+poetry env use python3.9
+
+# Install dependencies
 poetry install
+
+# Enter poetry shell
+poetry shell
+
+# Install procgen from source (required)
+git clone https://github.com/openai/procgen.git
+cd procgen
+git checkout 1d6dcd9f8ac5544c0f99d3b82c3a5ecb27e481f6  # version 0.10.7
+python -m pip install -e .
+
+# Install procgen-tools
+python -m pip install git+https://github.com/UlisseMini/procgen-tools.git
 ```
 
-If poetry is not installed, you can create a virtual environment and install the dependencies manually:
+### Option 3: Using pip
 ```bash
-python3.9 -m venv venv
-source venv/bin/activate
-poetry install
+# Create virtual environment with Python 3.9
+python3.9 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Upgrade pip
+python -m pip install --upgrade pip
+
+# Install dependencies
+python -m pip install -r requirements.txt
+
+# Install procgen from source (required)
+git clone https://github.com/openai/procgen.git
+cd procgen
+git checkout 1d6dcd9f8ac5544c0f99d3b82c3a5ecb27e481f6  # version 0.10.7
+python -m pip install -e .
+
+# Install procgen-tools
+python -m pip install git+https://github.com/UlisseMini/procgen-tools.git
 ```
-If you aren't using poetry it is highly recommended that you install the project. 
-You can achieve this by running the following in the root directory.
+
+## macOS Setup
+macOS users need to install Qt5 before building procgen:
+
 ```bash
-pip install -e .
+# Install Qt5
+brew install qt@5
+
+# Add Qt to your PATH (add this to your ~/.zshrc or ~/.bashrc)
+export PATH="/usr/local/opt/qt@5/bin:$PATH"
 ```
 
+## Known Issues and Solutions
 
-Since `procgen-tools` is not managed well we need to install it manually afterwards:
-```bash
-(to access the poetry environment in your shell for installing pip, use the command: "poetry shell")
-pip install git+https://github.com/UlisseMini/procgen-tools.git
-```  
+### Procgen Build Issues
+If you encounter build errors with procgen, modify `CMakeLists.txt` in the procgen source:
+```cmake
+# Find this line:
+# add_compile_options(-Wextra -Wshadow -Wall -Wformat=2 -Wundef -Wvla -Wmissing-include-dirs -Wnon-virtual-dtor -Werror)
 
-To get procgen to build on a mac requires some work to get the C code to build.
-
-For this one must install qt@5 using brew and then add this to your system path so you can access it.
-
-Then, normally it makes sense to build procgen from source. I have also had to modify CMakeLists.txt to ensure that warnings are not treated as errors, and this has made building easier.
-
-Change the line in CMAKELISTS.txt that contains the flag -werror to this:
+# Replace it with:
 add_compile_options(-Wextra -Wshadow -Wall -Wformat=2 -Wundef -Wvla -Wmissing-include-dirs -Wnon-virtual-dtor -Wno-unused-parameter -Wno-unused-variable)
+```
+
+### Environment Issues
+- Always use `python -m pip` instead of just `pip` when not using uv or poetry
+- Verify your environment is correct:
+```bash
+which python
+python --version  # should show Python 3.9.x
+```
+
+### Version Conflicts
+- Use a fresh virtual environment if you encounter persistent issues
+- Make sure procgen is installed before procgen-tools
+- Verify you're using Python 3.9
+
+## Verifying Installation
+After installation, verify everything works:
+```python
+python
+>>> import procgen_tools
+>>> import procgen
+```
+
+## Project Structure
+```
+.
+├── requirements.txt          # Core dependencies
+├── pyproject.toml           # Poetry configuration
+├── .python-version          # Python version file
+└── .gitignore              # Includes virtual environments and build artifacts
+```
