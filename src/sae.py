@@ -342,7 +342,7 @@ def get_layer_hyperparameters(layer_name, layer_types):
         }
     elif layer_type == "fc":
         return {
-            "d_hidden": 2048,
+            "d_hidden": 4096,
             "l1_coeff": 0.0001,
         }
     else:
@@ -516,6 +516,9 @@ def train_sae(
             num_envs=num_envs,
             episode_length=episode_length,
         )
+    all_activations = replay_buffer.activations[: replay_buffer.size]
+    buffer_mean = t.mean(all_activations, dim=0)
+    buffer_std = t.std(all_activations, dim=0)
     for step in progress_bar:
         if step % 250 == 0:
 
@@ -531,7 +534,6 @@ def train_sae(
             all_activations = replay_buffer.activations[: replay_buffer.size]
             buffer_mean = t.mean(all_activations, dim=0)
             buffer_std = t.std(all_activations, dim=0)
-
 
         try:
             activations_unflattened, observations = replay_buffer.sample(batch_size)
@@ -655,7 +657,7 @@ def train_sae(
             total_reconstruction_loss += reconstruction_loss
 
 
-        total_loss = probs_diff + 0.1 * total_reconstruction_loss + 0.1 * L_sparsity 
+        total_loss = probs_diff + 0.1 * total_reconstruction_loss 
 
         total_loss.backward()
         optimizer.step()
@@ -678,13 +680,18 @@ def train_sae(
         if step % log_freq == 0 or step == steps - 1:
             progress_bar.set_postfix(
                 {
-                    "Loss": sparsity_loss.item(),
-                    "Total Loss": total_loss.item(),
-                    "Reconstruction": L_reconstruction.item(),
-                    "Sparsity": L_sparsity.item(),
-                    "Variance Explained": variance_explained,
-                    "probs_diff diff": probs_diff.item(),
-                    "Downstream Recon Loss": total_reconstruction_loss,  
+                    "step": f"{step:6d}",
+                    "loss": f"{sparsity_loss.item():8.6f}",
+                    "total_loss": f"{total_loss.item():8.6f}", 
+                    "total_recon_loss": f"{total_reconstruction_loss:8.6f}",
+                    "recon_loss": f"{L_reconstruction.item():8.6f}",
+                    "sparsity": f"{L_sparsity.item():8.6f}",
+                    "probs_diff": f"{probs_diff.item():8.6f}",
+                    "down_recon": f"{total_reconstruction_loss:8.6f}",
+                    "acts_mean": f"{acts_mean:6.4f}",
+                    "acts_min": f"{acts_min:6.4f}", 
+                    "acts_max": f"{acts_max:6.4f}",
+                    "var_exp": f"{variance_explained:6.4f}",
                 }
             )
             loss_history.append(sparsity_loss.item())
@@ -729,6 +736,8 @@ def train_sae(
                     model, num_envs=8, episode_length=150
                 )
 
+                avg_reward_without_sae = sum(rewards_without_sae) / len(rewards_without_sae)
+
                 handle = replace_layer_with_sae(model, sae, layer_number)
 
                 rewards_with_sae = run_test_episodes(
@@ -742,6 +751,7 @@ def train_sae(
                     {
                         "logit_differences_histogram": wandb.Image(img),
                         "avg_reward_with_sae": avg_reward_with_sae,
+                        "avg_rewards_without_sae": avg_reward_without_sae
                     },
                     step=step,
                 )

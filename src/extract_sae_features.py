@@ -403,22 +403,16 @@ def replace_layer_with_sae(model, sae, layer_number):
 
     # Define the hook function
     def hook_fn(module, input, output):
-
-        # Handle possible batches using einops
-        if input[0].dim() == 4:  # Batch of 2D inputs (e.g., for conv layers)
-            h = einops.rearrange(input[0], "b c h w -> b (c h w)")
-        elif input[0].dim() == 3:  # Batch of 1D inputs (e.g., for fc layers)
-            h = einops.rearrange(input[0], "b s f -> b (s f)")
-        else:  # Single input
-            h = einops.rearrange(input[0], "... -> 1 (...)")
+        if output.dim() == 2:  
+            h = output
+        else:
+            raise ValueError(f"Unexpected output dimension from fc1: {output.dim()}")
 
         h = h.to(device)
 
         # Pass through SAE
-
         _, _, _, acts, h_reconstructed = sae(h)
 
-        # Reshape h_reconstructed back to original shape using reshape_as
         h_reconstructed = h_reconstructed.reshape_as(output)
 
         # print("Input:", input)
