@@ -13,12 +13,12 @@ from torch import Tensor, nn
 from torch.distributions.categorical import Categorical
 from torch.nn import functional as F
 from tqdm.auto import tqdm
-import sae
+import src.sae_cnn as sae_cnn
 
 import autoreload
 
 device = t.device(
-    "mps"
+    "cpu"
     if t.backends.mps.is_available()
     else "cuda" if t.cuda.is_available() else "cpu"
 )
@@ -74,7 +74,7 @@ def constant_lr(*_):
 
 
 # Load the model
-model = sae.load_interpretable_model()
+model = sae_cnn.load_interpretable_model()
 model.to(device)
 model.eval()  # Set model to evaluation mode
 
@@ -86,12 +86,12 @@ ordered_layer_names = {
     # 5: 'pool2',
     # 6: "conv3a",
     # 7: 'pool3',
-    # 8: 'conv4a',
+    8: 'conv4a',
     # 9: 'pool4',
-    10: 'fc1',
-    11: 'fc2',
-    12: 'fc3',
-    13: 'value_fc',
+    # 10: 'fc1',
+    # 11: 'fc2',
+    # 12: 'fc3',
+    # 13: 'value_fc',
     # 14: 'dropout_conv',
     # 15: 'dropout_fc'
 }
@@ -146,22 +146,22 @@ ordered_layer_names = {
 #     save_dir="global_stats",
 # )
 # %%
-layer_number = 10
+layer_number = 8
 layer_name = ordered_layer_names[layer_number]
-sae.train_layer(
+
+sae_cnn.train_layer(
     model,
     layer_name,
     layer_number,
-    layer_types,
-    checkpoint_dir="checkpoints",
-    stats_dir="global_stats",
-    wandb_project="SAE_training",
     steps=1100000,
     batch_size=64,
     lr=1e-5,
     num_envs=8,
     episode_length=150,
     log_freq=100,
+    checkpoint_dir="checkpoints",
+    stats_dir="global_stats",
+    wandb_project="SAE_training",
 )
 
 # %%
@@ -169,20 +169,42 @@ model = helpers.load_interpretable_model()
 model.to(device)
 model.eval()
 # Test data collection
-model.eval()
-layer_number = 6
 model_activations = helpers.ModelActivations(model)
-replay_buffer = sae.ReplayBuffer(capacity=10000)
-sae.generate_episodes_and_fill_buffer(
-    model,
-    model_activations,
-    layer_number,
-    replay_buffer,
-    num_envs=32,
-    max_steps_per_episode=120,
+layer_number = 8
+layer_name = ordered_layer_names[layer_number]
+
+# 1) Hook model to find activation shape:
+model_activations = helpers.ModelActivations(model)
+dummy_obs = t.zeros((1, 64, 64, 3), dtype=t.float32, device=device)
+dummy_obs = einops.rearrange(dummy_obs, "b h w c -> b c h w")
+with t.no_grad():
+    _, act_dict = model_activations.run_with_cache(dummy_obs, layer_name)
+layer_activation = act_dict[layer_name.replace(".", "_")]
+activation_shape = tuple(layer_activation.shape[1:])  # all but batch
+observation_shape = (3, 64, 64)
+
+# 2) Create replay buffer
+replay_buffer = sae_cnn.ReplayBuffer(
+    capacity=10000,
+    activation_shape=activation_shape,
+    observation_shape=observation_shape,
+    device=device,
+    oversample_large_activations=False
 )
 
-print(f"Replay buffer size: {len(replay_buffer)}")
+# 3) Collect data
+sae_cnn.collect_activations_into_replay_buffer(
+    model,
+    model_activations,
+    layer_number=layer_number,
+    replay_buffer=replay_buffer,
+    num_envs=32,
+    episode_length=120,
+)
+
+
+
+
 
 
 # %%

@@ -27,6 +27,17 @@ from src.visualisation_functions import *
 
 from src.utils import heist
 
+
+def get_device():
+    if t.cuda.is_available():
+        return t.device("cuda")
+    elif hasattr(t.backends, "mps") and t.backends.mps.is_available():
+        return t.device("cpu")
+    else:
+        return t.device("cpu")
+
+device = get_device()
+
 ordered_layer_names = {
     0: "conv_seqs",
     1: "conv_seqs.0",
@@ -120,6 +131,7 @@ class ModelActivations:
                 self.register_hook_by_path(path, path.replace(".", "_"))
         else:
             raise ValueError("layer_paths must be a string or a list of strings")
+        input.to(device)
         output = self.model(input)
         return output, self.activations
 
@@ -127,7 +139,9 @@ class ModelActivations:
 def generate_action(model, obs, is_procgen_env=True):
     with t.no_grad():
         if len(obs.shape) == 3:
-            obs = np.expand_dims(obs, axis=0)
+            obs = np.expand_dims(obs, axis=0).to(device)
+        obs = t.from_numpy(obs).float().to(device)
+        model.to(device)
         outputs = model(obs)
     logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
     probabilities = F.softmax(logits, dim=-1)
@@ -439,7 +453,6 @@ def compute_activation_differences(activations1, activations2):
 
         # Store the difference tensor in a tuple
         differences[key] = (difference,)
-        print(difference.shape)
 
         # Check if there are any non-zero differences
         has_non_zero = t.any(difference != 0)
@@ -448,7 +461,6 @@ def compute_activation_differences(activations1, activations2):
             print(f"Key: {key} has non-zero differences.")
         else:
             print(f"Key: {key} has only zero differences.")
-    print(differences)
     return differences
 
 
@@ -684,7 +696,7 @@ def run_episode_and_save_as_gif(
     episode_timeout=200,
     is_procgen_env=True,
 ):
-
+    model=model.to(device)
     observations = []
     observation = env.reset()
     done = False
