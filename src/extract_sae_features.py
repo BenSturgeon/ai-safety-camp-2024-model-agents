@@ -16,7 +16,7 @@ import wandb
 import os
 import glob
 import matplotlib.pyplot as plt
-import sae
+import src.sae_cnn as sae_cnn
 from src.utils import helpers, heist
 
 # from src.perform_sae_analysis import measure_logit_difference, collect_strong_activations
@@ -75,7 +75,6 @@ def measure_logit_difference(model, sae, layer_number, num_samples=100):
 
     # Convert observations to tensor
     obs_tensor = t.tensor(observations, dtype=t.float32).squeeze(dim=0)
-    print(obs_tensor.shape)
     # obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
 
     # Get logits without SAE
@@ -403,15 +402,13 @@ def replace_layer_with_sae(model, sae, layer_number):
 
     # Define the hook function
     def hook_fn(module, input, output):
-        if output.dim() == 2:  
-            h = output
-        else:
-            raise ValueError(f"Unexpected output dimension from fc1: {output.dim()}")
 
+        h = output
         h = h.to(device)
+        sae.to(device)
 
         # Pass through SAE
-        _, _, _, acts, h_reconstructed = sae(h)
+        _, _, acts, h_reconstructed = sae(h)
 
         h_reconstructed = h_reconstructed.reshape_as(output)
 
