@@ -733,6 +733,7 @@ def run_episode_and_save_as_gif(
 
     if save_gif:
         imageio.mimsave(filepath, frames, fps=30)
+        print(f"saved gif at {filepath}!")
 
     return total_reward, frames, observations
 

@@ -91,7 +91,7 @@ layer_sae_hparams = {
     "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-6},
-    "conv4a":   {"expansion_factor": 6, "l1_coeff": 1e-5},
+    "conv4a":   {"expansion_factor": 1, "l1_coeff": 1e-1},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc3":      {"expansion_factor": 4, "l1_coeff": 1e-5},
@@ -427,23 +427,47 @@ def get_module_by_path(model, layer_path):
     return module
 
 
-def run_test_episodes(model, num_envs=8, episode_length=150):
+def run_test_episodes(model, num_envs=8, episode_length=150, with_sae=False, num_episodes=5, with_gif=False):
     """
-    Optional utility to quickly measure average reward across multiple test episodes.
+    Utility to measure average reward across multiple test episodes.
+    
+    Args:
+        model: The model to test
+        num_envs: Number of parallel environments
+        episode_length: Maximum length of each episode
+        with_sae: Whether this is running with SAE enabled (for logging)
+        num_episodes: Number of episodes to average over
+    
+    Returns:
+        List of total rewards for each completed episode
     """
     venv = heist.create_venv(
-        num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
+        num=num_envs,
+        num_levels=0,
+        start_level=random.randint(1, 100000),
     )
+    
     model.to(device)
-    for param in model.parameters():
-        param.data = param.data.to(device)
-    total_rewards, frames, observations = helpers.run_episode_and_save_as_gif(
-        venv, model, filepath='episode_mod.gif', 
-        save_gif=False, episode_timeout=episode_length, 
-        is_procgen_env=True
-    )
-    # total_rewards will be the sum for that run; you can gather stats, etc.
-    return total_rewards
+    model.eval()  # Ensure model is in eval mode
+    
+    all_episode_rewards = []
+    
+    try:
+        for _ in range(num_episodes):
+            total_rewards, frames, observations = helpers.run_episode_and_save_as_gif(
+                venv, 
+                model, 
+                filepath=f'episode_test_{"with_sae" if with_sae else "no_sae"}.gif',
+                save_gif=with_gif, 
+                episode_timeout=episode_length,
+                is_procgen_env=True
+            )
+            all_episode_rewards.extend(total_rewards)
+            
+    finally:
+        venv.close()
+    
+    return all_episode_rewards
 
 
 ################################################################################
@@ -490,6 +514,7 @@ def train_sae(
         optimizer = optim.Adam(sae.parameters(), lr=lr)
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_step = checkpoint["step"] + 1
+        wandb.login()
         wandb.init(
             project=wandb_project,
             resume="allow",
@@ -627,7 +652,7 @@ def train_sae(
             # 1) Fraction active: flatten acts just for threshold counting
             b = acts.shape[0]
             acts_flat = acts.view(b, -1)  # (batch_size, hidden_channels*H*W)
-            frac_active = (acts_flat > 1e-5).float().mean().item()
+            frac_active = (acts_flat > 1e-3).float().mean().item()
 
             # 2) Flatten both for MSE or do a sum over dims
             diff = (activations - h_reconstructed)  # both (B, C, H, W)
@@ -660,16 +685,28 @@ def train_sae(
             }, step=step)
 
             if step % 1000 == 0:
-                r_no_sae = run_test_episodes(model, num_envs=8, episode_length=150)
-                # temporarily replace the layer with SAE
+                
+                rewards_without_sae = run_test_episodes(
+                    model, num_envs=8, episode_length=150, with_sae=False, num_episodes=1, with_gif=False
+                )
+                avg_reward_without_sae = sum(rewards_without_sae) / len(rewards_without_sae)
+
                 handle = replace_layer_with_sae(model, sae, layer_number)
-                model.to(device)
-                r_sae = run_test_episodes(model, num_envs=8, episode_length=150)
+
+                rewards_with_sae = run_test_episodes(
+                    model, num_envs=8, episode_length=150, with_sae=True, num_episodes=1, with_gif=False
+                )
+                avg_reward_with_sae = sum(rewards_with_sae) / len(rewards_with_sae)
+
                 handle.remove()
-                wandb.log({
-                    "test_reward_no_sae": r_no_sae,
-                    "test_reward_with_sae": r_sae,
-                }, step=step)
+
+                wandb.log(
+                    {
+                        "avg_reward_with_sae": avg_reward_with_sae,
+                        "avg_rewards_without_sae": avg_reward_without_sae
+                    },
+                    step=step,
+                )
 
         # Checkpoint save
         if (step + 1) % 1000 == 0 or step == steps - 1:
