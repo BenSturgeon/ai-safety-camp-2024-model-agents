@@ -1,21 +1,21 @@
 # %%
+import sys, os
 
-import os
-import sys
+sys.path.insert(0,
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 import einops
 import numpy as np
 import torch as t
-from jaxtyping import Float
+
 from torch import Tensor, nn
 from torch.distributions.categorical import Categorical
 from torch.nn import functional as F
 from tqdm.auto import tqdm
 import src.sae_cnn as sae_cnn
-
-import autoreload
 
 device = t.device(
     "cpu"
@@ -153,62 +153,62 @@ sae_cnn.train_layer(
     model,
     layer_name,
     layer_number,
-    steps=1100000,
+    steps=4500000,
     batch_size=64,
     lr=1e-5,
     num_envs=8,
     episode_length=150,
-    log_freq=100,
+    log_freq=1000,
     checkpoint_dir="checkpoints",
     stats_dir="global_stats",
     wandb_project="SAE_training",
 )
 
 # %%
-model = helpers.load_interpretable_model()
-model.to(device)
-model.eval()
-# Test data collection
-model_activations = helpers.ModelActivations(model)
-layer_number = 8
-layer_name = ordered_layer_names[layer_number]
+# model = helpers.load_interpretable_model()
+# model.to(device)
+# model.eval()
+# # Test data collection
+# model_activations = helpers.ModelActivations(model)
+# layer_number = 8
+# layer_name = ordered_layer_names[layer_number]
 
-# 1) Hook model to find activation shape:
-model_activations = helpers.ModelActivations(model)
-dummy_obs = t.zeros((1, 64, 64, 3), dtype=t.float32, device=device)
-dummy_obs = einops.rearrange(dummy_obs, "b h w c -> b c h w")
-with t.no_grad():
-    _, act_dict = model_activations.run_with_cache(dummy_obs, layer_name)
-layer_activation = act_dict[layer_name.replace(".", "_")]
-activation_shape = tuple(layer_activation.shape[1:])  # all but batch
-observation_shape = (3, 64, 64)
+# # 1) Hook model to find activation shape:
+# model_activations = helpers.ModelActivations(model)
+# dummy_obs = t.zeros((1, 64, 64, 3), dtype=t.float32, device=device)
+# dummy_obs = einops.rearrange(dummy_obs, "b h w c -> b c h w")
+# with t.no_grad():
+#     _, act_dict = model_activations.run_with_cache(dummy_obs, layer_name)
+# layer_activation = act_dict[layer_name.replace(".", "_")]
+# activation_shape = tuple(layer_activation.shape[1:])  # all but batch
+# observation_shape = (3, 64, 64)
 
-# 2) Create replay buffer
-replay_buffer = sae_cnn.ReplayBuffer(
-    capacity=10000,
-    activation_shape=activation_shape,
-    observation_shape=observation_shape,
-    device=device,
-    oversample_large_activations=False
-)
+# # 2) Create replay buffer
+# replay_buffer = sae_cnn.ReplayBuffer(
+#     capacity=10000,
+#     activation_shape=activation_shape,
+#     observation_shape=observation_shape,
+#     device=device,
+#     oversample_large_activations=False
+# )
 
-# 3) Collect data
-sae_cnn.collect_activations_into_replay_buffer(
-    model,
-    model_activations,
-    layer_number=layer_number,
-    replay_buffer=replay_buffer,
-    num_envs=32,
-    episode_length=120,
-)
-
-
+# # 3) Collect data
+# sae_cnn.collect_activations_into_replay_buffer(
+#     model,
+#     model_activations,
+#     layer_number=layer_number,
+#     replay_buffer=replay_buffer,
+#     num_envs=32,
+#     episode_length=120,
+# )
 
 
 
 
-# %%
-import autoreload
 
-autoreload.reload_all()
-# %%
+
+# # %%
+# import autoreload
+
+# autoreload.reload_all()
+# # %%
