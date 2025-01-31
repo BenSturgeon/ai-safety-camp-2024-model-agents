@@ -91,7 +91,7 @@ layer_sae_hparams = {
     "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-6},
-    "conv4a":   {"expansion_factor": 1, "l1_coeff": 0.9},
+    "conv4a":   {"expansion_factor": 4, "l1_coeff": 5e-5},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc3":      {"expansion_factor": 4, "l1_coeff": 1e-5},
@@ -262,43 +262,42 @@ class ConvSAE(nn.Module):
 ################################################################################
 # ACTIVATION COLLECTION & SAMPLING
 ################################################################################
-def compute_sparsity_metrics(acts, threshold=1e-3):
+def compute_sparsity_metrics(acts, threshold=1e-1):
     """
-    Compute multiple sparsity metrics for activations
+    Device-agnostic optimized version to compute sparsity metrics for activations
     
     Args:
         acts: Tensor of activations (batch_size, channels, height, width)
         threshold: Value above which activation is considered active
     """
-    batch_size = acts.shape[0]
-    
-    # Reshape to (batch_size, features)
-    acts_flat = acts.view(batch_size, -1)
-    
-    # 1. Standard fraction active (across all dimensions)
-    frac_active = (acts_flat > threshold).float().mean().item()
-    
-    # 2. Feature-wise activation frequency
-    # For each feature, what fraction of samples activate it?
-    feature_freqs = (acts_flat > threshold).float().mean(dim=0)
-    mean_feature_freq = feature_freqs.mean().item()
-    median_feature_freq = feature_freqs.median().item()
-    
-    # 3. Average number of active features per sample
-    active_per_sample = (acts_flat > threshold).sum(dim=1).float()
-    avg_active_features = active_per_sample.mean().item()
-    
-    # 4. Dead features (never activate across batch)
-    dead_features = (feature_freqs == 0).sum().item()
-    
-    return {
-        "frac_active": frac_active,
-        "mean_feature_freq": mean_feature_freq,
-        "median_feature_freq": median_feature_freq,
-        "avg_active_features": avg_active_features,
-        "dead_features": dead_features
-    }
-
+    with t.no_grad():
+        # Use mixed precision only if on CUDA
+        if acts.device.type == 'cuda':
+            ctx = t.cuda.amp.autocast()
+        else:
+            ctx = t.inference_mode()
+            
+        with ctx:
+            # Single flatten operation
+            acts_flat = acts.reshape(acts.shape[0], -1)
+            
+            # Compute mask once
+            active_mask = (acts_flat > threshold)
+            active_float = active_mask.float()
+            
+            # Compute all means/sums
+            frac_active = active_float.mean()
+            feature_freqs = active_float.mean(dim=0)
+            avg_active_features = active_mask.sum(dim=1).float().mean()
+            dead_features = (feature_freqs == 0).sum()
+            
+            return {
+                "frac_active": frac_active.item(),
+                "mean_feature_freq": feature_freqs.mean().item(),
+                "median_feature_freq": feature_freqs.median().item(),
+                "avg_active_features": avg_active_features.item(),
+                "dead_features": dead_features.item()
+            }
 
 def collect_activations_into_replay_buffer(
     model,
