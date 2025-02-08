@@ -64,7 +64,6 @@ layer_types = {
     "dropout_conv": "dropout_conv",
     "dropout_fc": "dropout_fc",
 }
-
 class ReplayBuffer:
     """
     A replay buffer to store and sample activations and observations.
@@ -366,42 +365,47 @@ def get_module_by_path(model, layer_path):
             module = getattr(module, element)
     return module
 
-def run_test_episodes(model, num_envs=8, episode_length=150):
+def run_test_episodes(model, num_envs=8, episode_length=150, with_sae=False, num_episodes=5):
     """
-    Run test episodes and return rewards.
+    Utility to measure average reward across multiple test episodes.
+    
+    Args:
+        model: The model to test
+        num_envs: Number of parallel environments
+        episode_length: Maximum length of each episode
+        with_sae: Whether this is running with SAE enabled (for logging)
+        num_episodes: Number of episodes to average over
+    
+    Returns:
+        List of total rewards for each completed episode
     """
     venv = heist.create_venv(
-        num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
+        num=num_envs,
+        num_levels=0,
+        start_level=random.randint(1, 100000),
     )
-    total_reward, frames, observations = helpers.run_episode_and_save_as_gif(venv, model, filepath=f'episode_mod_2_.gif', save_gif=False,episode_timeout=150, is_procgen_env=True)
-    return total_reward
-    venv = heist.create_venv(
-        num=num_envs, num_levels=0, start_level=random.randint(1, 100000)
-    )
-    obs = venv.reset()
-    total_rewards = 0
-    steps = np.zeros(num_envs, dtype=int)
-
-    while np.any(steps < episode_length):
-        observations = t.tensor(obs, dtype=t.float32).to(device)
-        observations = einops.rearrange(observations, "b h w c -> b c h w")
-
-        with t.no_grad():
-            outputs = model(observations)
-            logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
-            actions = t.argmax(logits, dim=-1).cpu().numpy()
-
-        obs, rewards, dones, _ = venv.step(actions)
-        total_rewards += rewards
-        steps += 1
-
-        for i, done in enumerate(dones):
-            if done:
-                total_rewards[i] = 0
-                steps[i] = 0
-
-    venv.close()
-    return total_rewards
+    
+    model.to(device)
+    model.eval()  # Ensure model is in eval mode
+    
+    all_episode_rewards = []
+    
+    try:
+        for _ in range(num_episodes):
+            total_rewards, frames, observations = helpers.run_episode_and_save_as_gif(
+                venv, 
+                model, 
+                filepath=f'episode_test_{"with_sae" if with_sae else "no_sae"}.gif',
+                save_gif=True, 
+                episode_timeout=episode_length,
+                is_procgen_env=True
+            )
+            all_episode_rewards.extend(total_rewards)
+            
+    finally:
+        venv.close()
+    print(all_episode_rewards)
+    return all_episode_rewards
 
 def train_sae(
     sae,
