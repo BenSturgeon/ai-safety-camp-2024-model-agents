@@ -31,6 +31,10 @@ python -m pip install -e .
 
 # Install procgen-tools
 python -m pip install git+https://github.com/UlisseMini/procgen-tools.git
+
+Note when testing: it is critical to use gym and not gymnasium when running procgen.
+
+Also, ensure that Qt5 is installed when building procgen from source
 ```
 
 ### Option 2: Using poetry
