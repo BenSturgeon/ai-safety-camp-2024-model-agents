@@ -91,7 +91,7 @@ layer_sae_hparams = {
     "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-7},
     "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-6},
-    "conv4a":   {"expansion_factor": 1, "l1_coeff": 1e-1},
+    "conv4a":   {"expansion_factor": 4, "l1_coeff": 5e-5},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc3":      {"expansion_factor": 4, "l1_coeff": 1e-5},
@@ -262,6 +262,42 @@ class ConvSAE(nn.Module):
 ################################################################################
 # ACTIVATION COLLECTION & SAMPLING
 ################################################################################
+def compute_sparsity_metrics(acts, threshold=1e-1):
+    """
+    Device-agnostic optimized version to compute sparsity metrics for activations
+    
+    Args:
+        acts: Tensor of activations (batch_size, channels, height, width)
+        threshold: Value above which activation is considered active
+    """
+    with t.no_grad():
+        # Use mixed precision only if on CUDA
+        if acts.device.type == 'cuda':
+            ctx = t.cuda.amp.autocast()
+        else:
+            ctx = t.inference_mode()
+            
+        with ctx:
+            # Single flatten operation
+            acts_flat = acts.reshape(acts.shape[0], -1)
+            
+            # Compute mask once
+            active_mask = (acts_flat > threshold)
+            active_float = active_mask.float()
+            
+            # Compute all means/sums
+            frac_active = active_float.mean()
+            feature_freqs = active_float.mean(dim=0)
+            avg_active_features = active_mask.sum(dim=1).float().mean()
+            dead_features = (feature_freqs == 0).sum()
+            
+            return {
+                "frac_active": frac_active.item(),
+                "mean_feature_freq": feature_freqs.mean().item(),
+                "median_feature_freq": feature_freqs.median().item(),
+                "avg_active_features": avg_active_features.item(),
+                "dead_features": dead_features.item()
+            }
 
 def collect_activations_into_replay_buffer(
     model,
@@ -649,6 +685,7 @@ def train_sae(
 
         # Some stats
         with t.no_grad():
+            metrics = compute_sparsity_metrics(acts,1e-1)
             # 1) Fraction active: flatten acts just for threshold counting
             b = acts.shape[0]
             acts_flat = acts.view(b, -1)  # (batch_size, hidden_channels*H*W)
@@ -682,9 +719,14 @@ def train_sae(
                 "frac_active": frac_active,
                 "variance_explained": var_explained,
                 "l1_coeff_current": current_l1_coeff,
+                "frac_active": metrics["frac_active"],
+                "mean_feature_freq": metrics["mean_feature_freq"],
+                "median_feature_freq": metrics["median_feature_freq"],
+                "avg_active_features": metrics["avg_active_features"],
+                "dead_features": metrics["dead_features"]
             }, step=step)
 
-            if step % 1000 == 0:
+            if step % 10000 == 0:
                 
                 rewards_without_sae = run_test_episodes(
                     model, num_envs=8, episode_length=150, with_sae=False, num_episodes=1, with_gif=False
@@ -709,14 +751,25 @@ def train_sae(
                 )
 
         # Checkpoint save
-        if (step + 1) % 1000 == 0 or step == steps - 1:
+        if (step + 1) % 100000 == 0 or step == steps - 1:
+            # Save locally first
             checkpoint_path = os.path.join(layer_checkpoint_dir, f"sae_checkpoint_step_{step+1}.pt")
-            t.save({
+            checkpoint_data = {
                 "step": step,
                 "model_state_dict": sae.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "loss": total_loss.item(),
-            }, checkpoint_path)
+            }
+            t.save(checkpoint_data, checkpoint_path)
+            
+            # Save to wandb as an artifact
+            artifact = wandb.Artifact(
+                name=f"sae_model_{layer_identifier}_step_{step+1}",
+                type="model",
+                description=f"SAE model checkpoint for layer {layer_identifier} at step {step+1}"
+            )
+            artifact.add_file(checkpoint_path)
+            wandb.log_artifact(artifact)
 
     wandb.finish()
     return
