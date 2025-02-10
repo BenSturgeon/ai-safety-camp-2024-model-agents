@@ -78,7 +78,7 @@ export PATH="/root/.cargo/bin:$PATH"
 
 # Install dependencies with uv
 uv pip install --upgrade pip
-
+source $HOME/.local/bin/env
 uv venv -p 3.9 .venv
 
 source .venv/bin/activate
