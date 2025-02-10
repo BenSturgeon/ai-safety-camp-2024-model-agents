@@ -14,9 +14,8 @@ def measure_logit_difference(model, sae, layer_number, num_samples=100):
 
     # Convert observations to tensor
     obs_tensor = t.tensor(np.array(observations), dtype=t.float32)
-    print(obs_tensor.shape)
     obs_tensor = einops.rearrange(obs_tensor, " b c h w -> b h  w c").to(device)
-    print(obs_tensor.shape)
+
 
     # Get logits without SAE
     with t.no_grad():
@@ -214,4 +213,3 @@ print(f"Max activations for a single feature: {max_activations}")
 print(f"Min activations for a single feature: {min_activations}")
 
 # %%
-print(feature_activations)
