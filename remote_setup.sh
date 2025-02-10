@@ -72,7 +72,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 # Upgrade pip and create a virtual environment with Python 3.9
 uv pip install --upgrade pip
 uv venv -p 3.9 .venv
-
+curl -L -o model_interpretable.pt "https://drive.google.com/uc?export=download&id=1oYsWk3hhObafDA29x0YDcK9h6LQmYDNr"
 # Activate the virtual environment and install Python dependencies from the cloned repo
 source .venv/bin/activate
 uv pip install -r "$REPO_DIR/requirements.txt"
