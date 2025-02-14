@@ -17,8 +17,8 @@ import einops
 import math
 from PIL import Image
 
-from src.extract_sae_features import replace_layer_with_sae
-from src.utils import helpers, heist
+from extract_sae_features import replace_layer_with_sae
+from utils import helpers, heist
 
 def get_device():
     if t.cuda.is_available():

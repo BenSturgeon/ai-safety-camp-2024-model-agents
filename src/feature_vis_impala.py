@@ -7,6 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from utils.helpers import load_interpretable_model
 import gym
+from tqdm import tqdm
+import os
 
 def total_variation(x):
     """Calculate total variation of the image to encourage smoothness"""
@@ -56,14 +58,125 @@ def apply_color_correlation(x, color_matrix):
     """Apply a 3x3 color correlation matrix to an image tensor"""
     return torch.einsum('ij,bjhw->bihw', color_matrix, x)
 
+def compute_color_correlation_matrix(num_samples=10000, num_envs=8, episode_length=150, save_path="color_correlation.pt"):
+    """
+    Compute color correlation matrix from environment observations.
+    This helps make feature visualizations look more natural by capturing
+    color statistics of the environment.
+    
+    Args:
+        num_samples: Number of observations to collect
+        num_envs: Number of parallel environments
+        episode_length: Maximum length of each episode
+        save_path: Where to save the color correlation matrix
+    """
+    venv = gym.make('procgen:procgen-heist-v0')
+    observations = []
+    total_samples = 0
+    
+    with tqdm(total=num_samples, desc="Collecting observations") as pbar:
+        while total_samples < num_samples:
+            obs = venv.reset()
+            done = False
+            steps = 0
+            
+            while not done and steps < episode_length:
+                observations.append(obs)
+                total_samples += 1
+                pbar.update(1)
+                
+                # Random actions for exploration
+                action = venv.action_space.sample()
+                obs, _, done, _ = venv.step(action)
+                steps += 1
+                
+                if total_samples >= num_samples:
+                    break
+    
+    venv.close()
+    
+    # Convert observations to tensor and reshape
+    obs_tensor = torch.tensor(np.array(observations[:num_samples]), dtype=torch.float32)
+    obs_tensor = obs_tensor.permute(0, 3, 1, 2)  # NHWC -> NCHW
+    
+    # Flatten spatial dimensions
+    flat_obs = obs_tensor.reshape(-1, 3)  # Shape: (N*H*W, 3)
+    
+    # Compute correlation matrix
+    mean_color = flat_obs.mean(dim=0, keepdim=True)
+    centered_colors = flat_obs - mean_color
+    cov_matrix = torch.mm(centered_colors.t(), centered_colors) / (flat_obs.size(0) - 1)
+    
+    # Get correlation matrix through eigendecomposition
+    eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrix)
+    sqrt_eigenvalues = torch.sqrt(eigenvalues + 1e-8)
+    color_correlation = torch.mm(
+        eigenvectors * sqrt_eigenvalues.unsqueeze(0),
+        eigenvectors.t()
+    )
+    
+    # Print statistics
+    print("\nColor Correlation Matrix:")
+    print(color_correlation)
+    print("\nEigenvalues:", eigenvalues)
+    print("Eigenvectors:\n", eigenvectors)
+    
+    # Visualize the correlation matrix
+    plt.figure(figsize=(10, 4))
+    
+    # Plot correlation matrix
+    plt.subplot(121)
+    plt.imshow(color_correlation.cpu().numpy(), cmap='RdBu', vmin=-1, vmax=1)
+    plt.colorbar()
+    plt.title('Color Correlation Matrix')
+    plt.xticks([0,1,2], ['R', 'G', 'B'])
+    plt.yticks([0,1,2], ['R', 'G', 'B'])
+    
+    # Plot eigenspectrum
+    plt.subplot(122)
+    plt.bar(range(3), eigenvalues.cpu().numpy())
+    plt.title('Eigenspectrum')
+    plt.xlabel('Component')
+    plt.ylabel('Eigenvalue')
+    
+    plt.tight_layout()
+    plt.savefig('color_correlation_vis.png')
+    plt.close()
+    
+    # Save the matrix
+    torch.save({
+        'correlation_matrix': color_correlation,
+        'eigenvalues': eigenvalues,
+        'eigenvectors': eigenvectors,
+        'num_samples': num_samples,
+    }, save_path)
+    
+    print(f"\nSaved color correlation matrix to {save_path}")
+    return color_correlation
+
+def load_color_correlation_matrix(load_path="color_correlation.pt", device=None):
+    """Load a previously computed color correlation matrix"""
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    data = torch.load(load_path, map_location=device)
+    return data['correlation_matrix'].to(device)
+
 class FeatureVisualizer:
-    def __init__(self, model):
+    def __init__(self, model, color_correlation_path=None):
         self.model = model
         self.model.eval()
         self.device = next(model.parameters()).device
         self.activations = {}
         self.hooks = []
-        self.color_correlation = torch.eye(3, device=self.device)
+        
+        # Initialize color correlation - either load from file or use identity
+        if color_correlation_path and os.path.exists(color_correlation_path):
+            self.color_correlation = load_color_correlation_matrix(color_correlation_path, self.device)
+            print(f"Loaded color correlation matrix from {color_correlation_path}")
+        else:
+            self.color_correlation = torch.eye(3, device=self.device)
+            print("Using default identity color correlation matrix")
 
     def _register_hooks(self, target_layers):
         """Register forward hooks on target layers"""
@@ -82,6 +195,13 @@ class FeatureVisualizer:
             hook.remove()
         self.hooks = []
         self.activations = {}
+
+    def update_color_correlation(self, num_samples=10000, save_path="color_correlation.pt"):
+        """Update the color correlation matrix based on environment observations"""
+        self.color_correlation = compute_color_correlation_matrix(
+            num_samples=num_samples, 
+            save_path=save_path
+        ).to(self.device)
 
     def visualize_channel(self, target_layer, channel_idx, 
                          num_steps=2560, lr=0.05, tv_weight=1e-3, 
@@ -129,6 +249,9 @@ class FeatureVisualizer:
                     # Second jitter with smaller magnitude
                     ox, oy = np.random.randint(-4, 5, 2)  # Reduced from 8 to 4
                     processed_img = jitter(processed_img, ox, oy)
+                
+                # Apply color correlation
+                processed_img = apply_color_correlation(processed_img, self.color_correlation)
                 
                 # Crop padding
                 processed_img = processed_img[:, :, 4:-4, 4:-4]  # Changed from 16 to 4
@@ -231,4 +354,3 @@ for layer_name in layers_to_visualize:
     plt.show()
 
 # %%
-

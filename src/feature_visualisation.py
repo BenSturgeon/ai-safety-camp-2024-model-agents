@@ -227,3 +227,60 @@ print(output)
 # call `revert_fn()` that was returned by `replace_layer_with_sae`.
 
 
+
+
+
+# %%
+
+import torch
+from lucent.optvis import render, objectives, param
+
+
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Instantiate and load your RL model
+# You must pass any required arguments to your model constructor.
+model = load_interpretable_model()  # your RL CNN
+
+
+model.to(device)
+model.eval()
+
+# (Optional) List the model's layers to verify that Lucent can access them.
+from lucent.modelzoo.util import get_model_layers
+layer_names = get_model_layers(model)
+print("Model Layers:", layer_names)
+
+# Choose a layer to visualize.
+# For example, if your model has a convolutional layer you’d like to probe, assume its name is "conv4a".
+layer_to_visualize = "conv4a"  # Adjust this to match your model's architecture
+
+# Choose the target channel within that layer
+target_channel = 0  # Adjust as needed
+
+# Define the objective: maximize the mean activation of the target channel.
+objective = objectives.channel(layer_to_visualize, target_channel)
+
+# Optionally, define a parameterization function.
+# Here we use the Lucent parameterization for an image of width 224 (producing a 224x224 image).
+param_f = lambda: param.image(w=224, batch=1, fft=True, decorrelate=True)
+
+# Render the visualization. This will run the optimization to generate an image.
+# The output is a list of images (one per optimized objective).
+
+# Add abs transform to lucent
+from lucent.optvis import transform
+
+transform.register('abs', lambda: lambda x: torch.abs(x))
+
+list_of_images = render.render_vis(model, objective, param_f=param_f, transforms=[transform.abs()])
+
+# Display the resulting image.
+import matplotlib.pyplot as plt
+img = list_of_images[0]
+plt.figure(figsize=(6, 6))
+plt.imshow(img)
+plt.title(f"Visualization for {layer_to_visualize} Channel {target_channel}")
+plt.axis("off")
+plt.show()

@@ -1,6 +1,6 @@
 # %%
 import sys
-from src.utils import helpers, heist
+from utils import helpers, heist
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,8 +16,8 @@ import wandb
 import os
 import glob
 import matplotlib.pyplot as plt
-import src.sae_cnn as sae_cnn
-from src.utils import helpers, heist
+import sae_cnn as sae_cnn
+
 
 # from src.perform_sae_analysis import measure_logit_difference, collect_strong_activations
 
