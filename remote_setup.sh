@@ -36,6 +36,12 @@ echo "================ PUBLIC KEY START ================"
 cat ~/.ssh/id_ed25519.pub
 echo "================= PUBLIC KEY END ================="
 
+# Pause to allow copying the SSH key
+echo -e "\nPausing to allow time to copy the SSH key..."
+echo "Press Enter once you have copied the key to continue..."
+read -r
+
+
 # Configure Git if not already configured
 echo -e "\nChecking Git configuration..."
 if [ -z "$(git config --global user.email)" ] || [ -z "$(git config --global user.name)" ]; then
