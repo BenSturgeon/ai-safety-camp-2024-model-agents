@@ -77,6 +77,9 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 # Upgrade pip and create a virtual environment with Python 3.9
 uv pip install --upgrade pip
+
+cd "$REPO_DIR"
+
 uv venv -p 3.9 .venv
 curl -L -o model_interpretable.pt "https://drive.google.com/uc?export=download&id=1oYsWk3hhObafDA29x0YDcK9h6LQmYDNr"
 # Activate the virtual environment and install Python dependencies from the cloned repo
@@ -110,6 +113,8 @@ find_qt5_config() {
 if [ -z "${Qt5_DIR:-}" ]; then
     find_qt5_config
 fi
+
+cd ..
 
 # Clone and install procgen from source
 echo "Installing procgen from source..."
