@@ -84,7 +84,7 @@ uv venv -p 3.9 .venv
 curl -L -o model_interpretable.pt "https://drive.google.com/uc?export=download&id=1oYsWk3hhObafDA29x0YDcK9h6LQmYDNr"
 # Activate the virtual environment and install Python dependencies from the cloned repo
 source .venv/bin/activate
-uv pip install -r "$REPO_DIR/requirements.txt"
+uv pip install -r requirements.txt
 
 # Set Qt5 paths for procgen build
 echo "Setting up Qt5 environment variables..."
