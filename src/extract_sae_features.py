@@ -400,11 +400,18 @@ def replace_layer_with_sae(model, sae, layer_number):
         else:
             module = getattr(module, element)
 
+    device = next(model.parameters()).device
+    print(f"Model is on device: {device}")
+    
+    # Ensure SAE is on the same device
+    sae = sae.to(device)
+    print(f"SAE moved to device: {device}")
+
     # Define the hook function
     def hook_fn(module, input, output):
-
         h = output
-        h = h.to(device)
+        # No need to move h to device since it should already be on the correct device
+        # Just ensure SAE is on the same device
         sae.to(device)
 
         # Pass through SAE

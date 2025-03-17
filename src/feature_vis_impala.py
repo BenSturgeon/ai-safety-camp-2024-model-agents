@@ -204,7 +204,7 @@ class FeatureVisualizer:
         ).to(self.device)
 
     def visualize_channel(self, target_layer, channel_idx, 
-                         num_steps=2560, lr=0.05, tv_weight=1e-3, 
+                         num_steps=10, lr=0.05, tv_weight=1e-3, 
                          l2_weight=1e-3, jitter_amount=8):
         """
         Visualize what maximally activates a specific channel in a target layer.
@@ -313,44 +313,44 @@ def get_num_channels(model, layer_name):
     return None
 
 
-# Setup
-env = gym.make('procgen:procgen-heist-v0')
-model = load_interpretable_model()
-visualizer = FeatureVisualizer(model)
+# # Setup
+# env = gym.make('procgen:procgen-heist-v0')
+# model = load_interpretable_model()
+# visualizer = FeatureVisualizer(model)
 
-# Visualize all channels in each layer
-layers_to_visualize = ['conv1a', 'conv1b', 'conv2a', 'conv2b', 'conv3a', 'conv3b', 'conv4a', 'conv4b']
+# # Visualize all channels in each layer
+# layers_to_visualize = ['conv1a', 'conv1b', 'conv2a', 'conv2b', 'conv3a', 'conv3b', 'conv4a', 'conv4b']
 
-for layer_name in layers_to_visualize:
-    num_channels = get_num_channels(model, layer_name)
-    if num_channels is None:
-        print(f"Could not find layer {layer_name}")
-        continue
+# for layer_name in layers_to_visualize:
+#     num_channels = get_num_channels(model, layer_name)
+#     if num_channels is None:
+#         print(f"Could not find layer {layer_name}")
+#         continue
         
-    print(f"\nVisualizing {layer_name} - {num_channels} channels")
+#     print(f"\nVisualizing {layer_name} - {num_channels} channels")
     
-    # Calculate grid dimensions
-    grid_size = int(np.ceil(np.sqrt(num_channels)))
-    fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size*3, grid_size*3))
-    fig.suptitle(f'All Channels in {layer_name}', fontsize=16)
+#     # Calculate grid dimensions
+#     grid_size = int(np.ceil(np.sqrt(num_channels)))
+#     fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size*3, grid_size*3))
+#     fig.suptitle(f'All Channels in {layer_name}', fontsize=16)
     
-    # Flatten axes for easier indexing
-    axes_flat = axes.flatten()
+#     # Flatten axes for easier indexing
+#     axes_flat = axes.flatten()
     
-    # Visualize each channel
-    for channel_idx in range(num_channels):
-        print(f"Processing channel {channel_idx}/{num_channels}")
-        vis = visualizer.visualize_channel(layer_name, channel_idx)
+#     # Visualize each channel
+#     for channel_idx in range(num_channels):
+#         print(f"Processing channel {channel_idx}/{num_channels}")
+#         vis = visualizer.visualize_channel(layer_name, channel_idx)
         
-        axes_flat[channel_idx].imshow(vis)
-        axes_flat[channel_idx].set_title(f'Ch {channel_idx}')
-        axes_flat[channel_idx].axis('off')
+#         axes_flat[channel_idx].imshow(vis)
+#         axes_flat[channel_idx].set_title(f'Ch {channel_idx}')
+#         axes_flat[channel_idx].axis('off')
     
-    # Remove empty subplots
-    for idx in range(num_channels, len(axes_flat)):
-        fig.delaxes(axes_flat[idx])
+#     # Remove empty subplots
+#     for idx in range(num_channels, len(axes_flat)):
+#         fig.delaxes(axes_flat[idx])
     
-    plt.tight_layout()
-    plt.show()
+#     plt.tight_layout()
+#     plt.show()
 
-# %%
+# # %%
