@@ -202,6 +202,219 @@ def create_corridor_with_corner_environment(entity_one, entity_two, corridor_len
     return venv
 
 
+def flip_maze_pattern(pattern):
+    """
+    Flips a maze pattern vertically to make the coordinates more intuitive.
+    This allows for designing mazes where (0,0) is in the bottom-left corner.
+    
+    Args:
+        pattern (np.array): The original maze pattern
+        
+    Returns:
+        np.array: The vertically flipped maze pattern
+    """
+    return np.flip(pattern, axis=0)
+
+
+def create_specific_l_shaped_maze_env(maze_variant=0, entity_type="key", entity_color="blue"):
+    """
+    Creates one of 8 permutations of similar L-shaped mazes with a white mouse (player)
+    and a target entity (gem/key) at specified positions.
+    
+    Args:
+        maze_variant (int): Which maze variant to create (0-7) 
+        entity_type (str): Type of target entity - "key" or "gem"
+        entity_color (str): Color of the target entity - "red", "green", "blue"
+    
+    ✅ Step 1: Create environment and ensure entity existence
+    ✅ Step 2: Initialize new maze grid with specific pattern
+    ✅ Step 3: Remove entities and explicitly place them
+    
+    Returns:
+        venv: Updated virtual environment
+    """
+    # ✅ Step 1: Ensure entity exists in the environment
+    while True:
+        venv = heist.create_venv(
+            num=1, start_level=random.randint(1000, 10000), num_levels=0
+        )
+        state = heist.state_from_venv(venv, 0)
+        if state.entity_exists(ENTITY_TYPES["key"], ENTITY_COLORS["red"]):
+            break
+
+    # ✅ Step 2: Get the full grid and its dimensions
+    full_grid = state.full_grid(with_mouse=False)
+    height, width = full_grid.shape
+
+    # Define maze size and coordinates
+    maze_size = 7
+    middle_y = height // 2
+    middle_x = width // 2
+
+    start_y = middle_y - maze_size // 2
+    start_x = middle_x - maze_size // 2
+
+    # Initialize grid with walls (51=BLOCKED)
+    new_grid = np.full_like(full_grid, 51)
+
+    # Define 8 different maze patterns (1=path, 0=wall)
+    # Each pattern represents a different configuration with L-shaped paths
+    # These patterns are already flipped vertically for more intuitive design where (0,0) is at the bottom left
+    maze_patterns = [
+        # Variant 0: Original L-maze from example (player bottom-left, target top-right)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 0, 1, 0],
+            [0, 0, 0, 1, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0]
+        ])),
+        # Variant 1: Flipped horizontally (player bottom-right, target top-left)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 1, 1, 1, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0]
+        ])),
+        # Variant 2: Flipped vertically (player top-left, target bottom-right)
+        flip_maze_pattern(np.array([
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 1, 0],
+            [0, 1, 1, 1, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
+        ])),
+        # Variant 3: Rotated 180 degrees (player top-right, target bottom-left)
+        flip_maze_pattern(np.array([
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 1, 0, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
+        ])),
+        # Variant 4: S-shaped path (player bottom-left, target top-right)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 0, 1, 0],
+            [0, 0, 0, 1, 0, 1, 0],
+            [0, 1, 1, 1, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0]
+        ])),
+        # Variant 5: Inverted L (player bottom-left, target mid-right)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0]
+        ])),
+        # Variant 6: T-junction (player bottom, target top-right)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 1, 1, 1, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 1, 1, 1, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0]
+        ])),
+        # Variant 7: U-shaped path (player bottom-left, target bottom-right)
+        flip_maze_pattern(np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 0, 0, 1, 0],
+            [1, 1, 1, 0, 0, 1, 0],
+            [0, 0, 1, 0, 0, 1, 0],
+            [1, 0, 1, 0, 0, 1, 0],
+            [1, 1, 1, 1, 1, 1, 0]
+        ]))
+    ]
+    
+    # Helper function to convert from intuitive y-coordinate to actual grid y-coordinate
+    def convert_y_coord(y_pos, maze_size=maze_size):
+        """
+        Convert from intuitive y-coordinate (where 0 is bottom) to the actual grid 
+        y-coordinate (where 0 is top)
+        """
+        return (maze_size - 1) - y_pos
+    
+    # Define entity positions for each maze variant
+    # Format: (mouse_y, mouse_x, entity_y, entity_x)
+    # These positions use intuitive coordinates where (0,0) is at the bottom left
+    entity_positions = [
+        # Variant 0: Original (mouse bottom-left, entity top-right)
+        (4, 4, 2, 2),  # Testing going left
+        # Variant 1: Flipped horizontally
+        (4, 4, 2, 6), # Testing going right
+        # Variant 2: Flipped vertically
+        (2, 4, 0, 2),  # Test going up
+        # Variant 3: Rotated 180 degrees
+        (0, 4, 2, 6), #  Test going down
+        # Variant 4: S-shaped
+        (3, 4, 1, 2), # Test going left
+        # Variant 5: Inverted L
+        (3, 4, 1, 6), # Test going right
+        # Variant 6: T-junction
+        (3, 4, 1, 6), # Test going up
+        # Variant 7: U-shaped
+        (1, 3, 3, 1)  # Test going down
+    ]
+    
+    # Validate and select the maze variant
+    if maze_variant < 0 or maze_variant >= len(maze_patterns):
+        maze_variant = 0  # Default to original maze if out of range
+    
+    # Get the selected pattern and positions
+    pattern = maze_patterns[maze_variant]
+    intuitive_mouse_y, mouse_x, intuitive_entity_y, entity_x = entity_positions[maze_variant]
+    
+    # Convert the intuitive y-coordinates to actual grid y-coordinates
+    mouse_y = start_y + convert_y_coord(intuitive_mouse_y)
+    entity_y = start_y + convert_y_coord(intuitive_entity_y)
+    
+    # Apply maze pattern to grid (pattern is already flipped for intuitive design)
+    for i in range(maze_size):
+        for j in range(maze_size):
+            if pattern[i, j] == 1:
+                new_grid[start_y + i, start_x + j] = 100  # 100 is EMPTY
+
+    # Explicitly set new grid
+    state.set_grid(new_grid)
+
+    # ✅ Step 3: Remove all entities
+    state.remove_all_entities()
+
+    # Set mouse position explicitly
+    state.set_mouse_pos(mouse_y, mouse_x)
+
+    # Place entity (gem/cheese) explicitly at desired location
+    state.set_entity_position(
+        ENTITY_TYPES[entity_type], ENTITY_COLORS[entity_color], entity_y, entity_x
+    )
+
+    # Update the environment with the new state
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv.env.callmethod("set_state", [state_bytes])
+        venv.reset()
+
+    return venv
+
+
+
 def compare_first_key_collected(
     model_path,
     layer_number,
