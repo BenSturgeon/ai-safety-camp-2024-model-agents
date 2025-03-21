@@ -19,13 +19,13 @@ import random
 import sys
 
 sys.path.append("../")  # This is added so we can import from the source folder
-from src.policies_impala import ImpalaCNN
-from src.interpretable_impala import CustomCNN as interpretable_CNN
+from policies_impala import ImpalaCNN
+from interpretable_impala import CustomCNN as interpretable_CNN
 
 # from src.policies_modified import ImpalaCNN
-from src.visualisation_functions import *
+from visualisation_functions import *
 
-from src.utils import heist
+from utils import heist
 
 
 def get_device():
@@ -131,7 +131,9 @@ class ModelActivations:
                 self.register_hook_by_path(path, path.replace(".", "_"))
         else:
             raise ValueError("layer_paths must be a string or a list of strings")
-        input.to(device)
+        if not isinstance(input, t.Tensor):
+            input = t.tensor(input, dtype=t.float32)
+        input = input.to(device)
         output = self.model(input)
         return output, self.activations
 
@@ -224,6 +226,7 @@ def get_model_layer_names(model):
 
 def plot_activations_for_layers(activations, layer_paths, save_filename_prefix=None):
     for layer_name in layer_paths:
+        print(layer_name)
         # Check if the specified layer's activations are available
         if layer_name not in activations:
             print(f"No activations found for layer: {layer_name}")
@@ -444,6 +447,125 @@ def plot_four_activations_for_layers(
         else:
             plt.show()
 
+
+def plot_layer_channels(activations, layer_name, channel_indices=None, channels_per_plot=None, 
+                       cmap='viridis', save_prefix=None, figsize=(12, 10), layout=None):
+    """
+    Plot channels of a layer's activations with flexible layout options.
+    
+    Args:
+        activations: Dictionary of activations
+        layer_name: Name of the layer to visualize (e.g., 'conv4a')
+        channel_indices: List of specific channel indices to plot. If None, plot all channels.
+        channels_per_plot: Maximum number of channels to show in a single figure.
+                          If None, uses all channels.
+        cmap: Colormap to use for the visualization
+        save_prefix: If provided, save plots with this prefix instead of displaying
+        figsize: Size of the figure (width, height) in inches
+        layout: Tuple (rows, cols) for the grid layout. If None, calculated automatically.
+        
+    Returns:
+        None
+    """
+    if layer_name not in activations:
+        print(f"Layer '{layer_name}' not found in activations!")
+        return
+    
+    # Get activation tensor for the layer
+    activation = activations[layer_name]
+    print(f"Layer: {layer_name}, Shape: {activation.shape}")
+    
+    # Handle different possible shapes
+    if len(activation.shape) == 3:  # Shape is [channels, height, width]
+        num_channels, height, width = activation.shape
+        
+        # Determine which channels to plot
+        if channel_indices is None:
+            channel_indices = list(range(num_channels))
+        else:
+            # Make sure indices are valid
+            channel_indices = [i for i in channel_indices if 0 <= i < num_channels]
+            if not channel_indices:
+                print(f"No valid channel indices provided for layer {layer_name}")
+                return
+        
+        # Determine layout constraints
+        if layout is not None:
+            rows, cols = layout
+            # If layout is specified, it determines channels_per_plot
+            max_channels_per_plot = rows * cols
+        else:
+            # Default layout calculation
+            if channels_per_plot is None:
+                # If no layout or channels_per_plot is specified, show all channels
+                channels_per_plot = len(channel_indices)
+            
+            # Calculate a reasonable layout for channels_per_plot
+            cols = math.ceil(math.sqrt(min(channels_per_plot, len(channel_indices))))
+            rows = math.ceil(min(channels_per_plot, len(channel_indices)) / cols)
+            max_channels_per_plot = rows * cols
+        
+        # Calculate number of plots needed
+        num_plots = math.ceil(len(channel_indices) / max_channels_per_plot)
+        
+        # Generate each plot
+        for plot_idx in range(num_plots):
+            start_idx = plot_idx * max_channels_per_plot
+            end_idx = min(start_idx + max_channels_per_plot, len(channel_indices))
+            curr_indices = channel_indices[start_idx:end_idx]
+            
+            # Adjust layout for the last plot if it's not full
+            if plot_idx == num_plots - 1 and len(curr_indices) < max_channels_per_plot and layout is None:
+                # Recalculate layout for the last plot if it's not full
+                cols = math.ceil(math.sqrt(len(curr_indices)))
+                rows = math.ceil(len(curr_indices) / cols)
+            
+            # Create figure and subplots
+            fig, axes = plt.subplots(rows, cols, figsize=figsize)
+            
+            # Handle case of single subplot
+            if rows == 1 and cols == 1:
+                axes = np.array([[axes]])
+            elif rows == 1:
+                axes = axes.reshape(1, -1)
+            elif cols == 1:
+                axes = axes.reshape(-1, 1)
+            
+            # Plot each channel
+            for i, channel_idx in enumerate(curr_indices):
+                row, col = i // cols, i % cols
+                ax = axes[row, col]
+                
+                # Get channel activation and plot
+                channel_data = activation[channel_idx].detach().cpu().numpy()
+                im = ax.imshow(channel_data, cmap=cmap)
+                ax.set_title(f"Channel {channel_idx}", fontsize=10)
+                ax.axis('off')
+            
+            # Hide any empty subplots
+            for i in range(len(curr_indices), rows * cols):
+                row, col = i // cols, i % cols
+                axes[row, col].axis('off')
+            
+            # Add a colorbar to the figure
+            plt.tight_layout()
+            fig.subplots_adjust(right=0.9)
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+            fig.colorbar(im, cax=cbar_ax)
+            
+            plt.suptitle(f"Layer: {layer_name} (Plot {plot_idx+1}/{num_plots})", 
+                         fontsize=16, y=0.98)
+            
+            # Save or show the plot
+            if save_prefix:
+                plt.savefig(f"{save_prefix}_{layer_name}_plot{plot_idx+1}.png", bbox_inches='tight')
+                plt.close()
+            else:
+                plt.show()
+    
+    else:
+        print(f"Unexpected shape for layer {layer_name}: {activation.shape}")
+        print("This function expects 3D activations with shape [channels, height, width]")
 
 def compute_activation_differences(activations1, activations2):
     differences = {}
