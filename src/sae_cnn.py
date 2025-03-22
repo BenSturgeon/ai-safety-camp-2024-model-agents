@@ -15,9 +15,10 @@ from tqdm.auto import tqdm
 import wandb
 import einops
 import math
+import re
 from PIL import Image
 
-from extract_sae_features import replace_layer_with_sae
+
 from utils import helpers, heist
 
 def get_device():
@@ -87,10 +88,10 @@ layer_types = {
 #  - Pooling/Dropout layers often don't have typical learned weights. We might skip them or use small expansions
 
 layer_sae_hparams = {
-    "conv1a":   {"expansion_factor": 2, "l1_coeff": 1e-7},
-    "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-7},
-    "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-7},
-    "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-6},
+    "conv1a":   {"expansion_factor": 2, "l1_coeff": 1e-4},
+    "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
+    "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-4},
+    "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
     "conv4a":   {"expansion_factor": 4, "l1_coeff": 5e-5},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
@@ -259,9 +260,119 @@ class ConvSAE(nn.Module):
         return l1_loss, recon_loss, acts, x_hat
 
 
+def load_sae_from_checkpoint(checkpoint_path, device=None):
+    """
+    Load a SAE model from a checkpoint file
+    
+    Args:
+        checkpoint_path: Path to the SAE checkpoint
+        device: The device to load the model onto
+        
+    Returns:
+        sae: The loaded SAE model
+        layer_number: The layer number the SAE was trained on (extracted from checkpoint path)
+    """
+    if device is None:
+        device = t.device('cuda' if t.cuda.is_available() else 'cpu')
+    
+    print(f"Loading SAE from checkpoint: {checkpoint_path}")
+    
+    # Extract layer information from checkpoint path if possible
+    layer_match = re.search(r'layer_(\d+)_(\w+)', checkpoint_path)
+    layer_number = None
+    if layer_match:
+        layer_number = int(layer_match.group(1))
+        layer_name = layer_match.group(2)
+        print(f"Detected layer: {layer_name} (#{layer_number})")
+    
+    # Load the checkpoint
+    checkpoint = t.load(checkpoint_path, map_location=device)
+    
+    # Extract model parameters
+    state_dict = checkpoint["model_state_dict"]
+    
+    # Print state_dict keys to understand structure
+    print("State dict keys:", state_dict.keys())
+    
+    # For ConvSAE, we need to determine the in_channels and hidden_channels
+    if 'conv_enc.weight' in state_dict:
+        # This is a ConvSAE
+        conv_enc_weight = state_dict["conv_enc.weight"]
+        in_channels = conv_enc_weight.shape[1]
+        hidden_channels = conv_enc_weight.shape[0]
+        
+        print(f"ConvSAE detected with conv_enc.weight shape: {conv_enc_weight.shape}")
+        print(f"in_channels: {in_channels}, hidden_channels: {hidden_channels}")
+        
+        # Create the SAE with the correct dimensions
+        sae = ConvSAE(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            l1_coeff=1e-5  # Default value, doesn't matter for inference
+        )
+        
+        print(f"Created ConvSAE with in_channels={in_channels}, hidden_channels={hidden_channels}")
+    else:
+        raise ValueError("Unsupported SAE type in checkpoint or incorrect checkpoint format")
+    
+    # Load the state dict into the model
+    sae.load_state_dict(state_dict)
+    sae.eval()
+    sae.to(device)
+    
+    return sae
+
 ################################################################################
 # ACTIVATION COLLECTION & SAMPLING
 ################################################################################
+
+
+def replace_layer_with_sae(model, sae, layer_number):
+    # Get the layer name
+    layer_name = ordered_layer_names[layer_number]
+    # Locate the module
+    elements = layer_name.split(".")
+    module = model
+    for element in elements:
+        if "[" in element and "]" in element:
+            base, idx = element.split("[")
+            idx = int(idx[:-1])
+            module = getattr(module, base)[idx]
+        else:
+            module = getattr(module, element)
+
+    device = next(model.parameters()).device
+    print(f"Model is on device: {device}")
+    
+    # Ensure SAE is on the same device
+    sae = sae.to(device)
+    print(f"SAE moved to device: {device}")
+
+    # Define the hook function
+    def hook_fn(module, input, output):
+        h = output
+        # No need to move h to device since it should already be on the correct device
+        # Just ensure SAE is on the same device
+        sae.to(device)
+
+        # Pass through SAE
+        _, _, acts, h_reconstructed = sae(h)
+
+        h_reconstructed = h_reconstructed.reshape_as(output)
+
+        # print("Input:", input)
+        # print("Reconstructed:", h_reconstructed)
+        # print("Original output:", output)
+        # print(output.shape, h_reconstructed.shape)
+
+        # print("Output diff", output - h_reconstructed)
+
+        return h_reconstructed
+
+    # Register the forward hook
+    handle = module.register_forward_hook(hook_fn)
+    return handle  # Return the handle to remove the hook later
+
 def compute_sparsity_metrics(acts, threshold=1e-1):
     """
     Device-agnostic optimized version to compute sparsity metrics for activations
