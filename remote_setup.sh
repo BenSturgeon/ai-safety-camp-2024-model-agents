@@ -70,7 +70,7 @@ echo "Setting up Python environment..."
 pip install uv
 
 # Install uv using the provided install script
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Ensure uv is in PATH (adjust the path if necessary)
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -122,17 +122,17 @@ if [ ! -d "procgen" ]; then
     git clone https://github.com/openai/procgen.git
 else
     echo "Procgen directory already exists, pulling latest changes..."
-    (cd procgen && git pull && uv pip install -e .)
+    (cd procgen && git pull && uv pip install -e . && cd ..)
 fi
 
 # Clone and install procgen-tools
 echo "Installing procgen-tools..."
 if [ ! -d "procgen-tools" ]; then
     git clone https://github.com/UlisseMini/procgen-tools.git
-    (cd procgen-tools && uv pip install -e .)
+    (cd procgen-tools && uv pip install -e . && cd ..)
 else
     echo "Procgen-tools already installed, upgrading to latest version..."
-    (cd procgen-tools && git pull && uv pip install --upgrade -e .)
+    (cd procgen-tools && git pull && uv pip install --upgrade -e . && cd ..)
 fi
 
 echo -e "\nSetup complete! Remember to:"
