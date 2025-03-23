@@ -215,7 +215,6 @@ def flip_maze_pattern(pattern):
     """
     return np.flip(pattern, axis=0)
 
-
 def create_specific_l_shaped_maze_env(maze_variant=0, entities=None):
     """
     Creates one of 8 permutations of similar L-shaped mazes with a white mouse (player)
@@ -265,89 +264,98 @@ def create_specific_l_shaped_maze_env(maze_variant=0, entities=None):
     # Initialize grid with walls (51=BLOCKED)
     new_grid = np.full_like(full_grid, 51)
 
-    # Define 8 different maze patterns (1=path, 0=wall)
+    # Define 8 different maze patterns (1=path, 0=wall, 2=target entity position, 3=player position)
     # Each pattern represents a different configuration with L-shaped paths
     # These patterns are already flipped vertically for more intuitive design where (0,0) is at the bottom left
+
     maze_patterns = [
-        # Variant 0: Original L-maze from example (player bottom-left, target top-right)
+        # Variant 0: Original L-maze from example (player bottom-left, target top-right) 
+        # right
         flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 2, 1, 1, 0],
+            [0, 0, 0, 1, 0, 1, 0], 
+            [1, 3, 1, 1, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 0, 0, 1, 0],
             [0, 1, 1, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 0, 1, 0],
-            [0, 0, 0, 1, 0, 1, 0],
-            [0, 1, 1, 1, 1, 1, 0]
+            [0, 0, 0, 0, 0, 0, 0]
         ])),
         # Variant 1: Flipped horizontally (player bottom-right, target top-left)
+        # right
         flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 1, 1, 1, 0],
             [0, 1, 0, 1, 0, 0, 0],
-            [0, 1, 1, 1, 1, 1, 0]
+            [0, 1, 0, 3, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 2, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
         ])),
         # Variant 2: Flipped vertically (player top-left, target bottom-right)
+        # up
         flip_maze_pattern(np.array([
-            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 0, 0, 0, 0],
+            [1, 2, 1, 1, 1, 1, 0],
+            [0, 1, 0, 1, 0, 1, 0],
+            [0, 1, 0, 1, 0, 1, 0],
+            [0, 1, 0, 3, 0, 1, 0],
             [0, 0, 0, 1, 0, 1, 0],
-            [0, 1, 1, 1, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0, 0, 0]
-        ])),
-        # Variant 3: Rotated 180 degrees (player top-right, target bottom-left)
-        flip_maze_pattern(np.array([
-            [0, 1, 1, 1, 1, 1, 0],
-            [0, 1, 0, 1, 0, 0, 0],
-            [0, 1, 0, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0, 0, 0]
-        ])),
-        # Variant 4: S-shaped path (player bottom-left, target top-right)
-        flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 1, 1, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 0, 1, 0],
-            [0, 0, 0, 1, 0, 1, 0],
-            [0, 1, 1, 1, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0]
-        ])),
-        # Variant 5: Inverted L (player bottom-left, target mid-right)
-        flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0, 1, 0],
-            [0, 0, 0, 0, 0, 1, 0],
             [0, 1, 1, 1, 1, 1, 0]
         ])),
-        # Variant 6: T-junction (player bottom, target top-right)
+        # Variant 3: Rotated 180 degrees (player top-right, target bottom-left)
+        # up
         flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 1, 0, 1, 1, 1, 0],
+            [0, 0, 1, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 2, 0],
             [0, 1, 0, 1, 0, 0, 0],
-            [0, 1, 1, 1, 0, 0, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 1, 0, 3, 1, 1, 0],
+            [0, 1, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0]
+        ])),
+        # Variant 4: S-shaped path (player bottom-left, target top-right)
+        # left
+        flip_maze_pattern(np.array([
+            [0, 1, 0, 1, 0, 1, 0],
+            [0, 1, 1, 3, 1, 1, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 2, 0, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
+        ])),
+        # Variant 5: Inverted L (player bottom-left, target mid-right)
+        # left
+        flip_maze_pattern(np.array([
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 3, 0],
+            [0, 1, 0, 1, 0, 1, 0],
+            [0, 1, 0, 2, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
+        ])),
+        # Variant 6: T-junction (player bottom, target top-right)
+        # down
+        flip_maze_pattern(np.array([
+            [0, 0, 1, 0, 0, 1, 0],
+            [0, 0, 3, 1, 1, 1, 0],
             [0, 0, 1, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0, 0]
+            [0, 1, 1, 1, 2, 0, 0],
+            [0, 1, 0, 1, 0, 0, 0],
+            [0, 1, 0, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
         ])),
         # Variant 7: U-shaped path (player bottom-left, target bottom-right)
+        # down
         flip_maze_pattern(np.array([
-            [0, 0, 0, 0, 0, 0, 0],
             [1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 0, 0, 1, 0],
-            [1, 1, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 1, 0],
             [1, 0, 1, 0, 0, 1, 0],
-            [1, 1, 1, 1, 1, 1, 0]
+            [0, 0, 1, 0, 0, 1, 0],
+            [1, 1, 3, 0, 0, 1, 0],
+            [0, 0, 1, 0, 0, 1, 0],
+            [1, 1, 1, 1, 2, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0]
         ]))
     ]
     
@@ -358,94 +366,62 @@ def create_specific_l_shaped_maze_env(maze_variant=0, entities=None):
         y-coordinate (where 0 is top)
         """
         return (maze_size - 1) - y_pos
-    
-    # Define mouse positions for each maze variant (using intuitive coordinates)
-    # Format: (mouse_y, mouse_x)
-    mouse_positions = [
-        (4, 3),  # Variant 0: mouse at bottom-left area
-        (4, 4),  # Variant 1: mouse at bottom-right area
-        (2, 4),  # Variant 2: mouse at top-left area
-        (0, 4),  # Variant 3: mouse at top-right area
-        (3, 4),  # Variant 4: S-shaped
-        (3, 4),  # Variant 5: Inverted L
-        (3, 4),  # Variant 6: T-junction
-        (1, 3),  # Variant 7: U-shaped
-    ]
-    
-    # Define default entity positions for each maze variant (if no entities are provided)
-    # Format: (entity_y, entity_x)
-    default_entity_positions = [
-        (2, 2),  # Variant 0: entity at top-right area
-        (2, 6),  # Variant 1: entity at top-left area
-        (0, 2),  # Variant 2: entity at bottom-right area
-        (2, 6),  # Variant 3: entity at bottom-left area
-        (1, 2),  # Variant 4: S-shaped
-        (1, 6),  # Variant 5: Inverted L
-        (1, 6),  # Variant 6: T-junction
-        (3, 1),  # Variant 7: U-shaped
-    ]
-    
-    # Validate and select the maze variant
+    # Get the selected pattern
     if maze_variant < 0 or maze_variant >= len(maze_patterns):
         maze_variant = 0  # Default to original maze if out of range
-    
-    # Get the selected pattern and mouse position
     pattern = maze_patterns[maze_variant]
-    intuitive_mouse_y, mouse_x = mouse_positions[maze_variant]
     
-    # Convert the intuitive mouse y-coordinate to actual grid y-coordinate
-    mouse_y = start_y + convert_y_coord(intuitive_mouse_y)
-    
-    # Apply maze pattern to grid (pattern is already flipped for intuitive design)
+    # Find player position (3) and target (2) in pattern
+    player_pos = target_pos = None
     for i in range(maze_size):
         for j in range(maze_size):
-            if pattern[i, j] == 1:
-                new_grid[start_y + i, start_x + j] = 100  # 100 is EMPTY
+            val = pattern[i,j]
+            if val == 3:
+                player_pos = (i,j) 
+            elif val == 2:
+                target_pos = (i,j)
+            if val in [1,2,3]:
+                new_grid[i,j] = 100 # Empty space
+    
+    if not player_pos:
+        raise ValueError("No player position (3) found in maze pattern")
+    
+    player_y, player_x = player_pos
 
-    # Explicitly set new grid
     state.set_grid(new_grid)
-
-    # ✅ Step 3: Remove all entities
     state.remove_all_entities()
+    state.set_mouse_pos(player_y, player_x)
 
-    # Set mouse position explicitly
-    state.set_mouse_pos(mouse_y, mouse_x + start_x)
-
-    # If no entities are provided, use the default position for this maze variant
-    if not entities:
-        default_y, default_x = default_entity_positions[maze_variant]
-        entities = [
-            {
-                "type": "key",
-                "color": "blue",
-                "position": (default_y, default_x)
-            }
-        ]
+    if not entities and target_pos is not None:
+        target_y, target_x = target_pos
+        entities = [{
+            "type": "key",
+            "color": "blue", 
+            "position": (convert_y_coord(target_y-1), target_x-1)
+        }]
     
     # Place all entities at their specified locations
-    for entity in entities:
-        entity_type = entity["type"]
-        entity_color = entity["color"]
-        intuitive_y, x = entity["position"]
-        
-        # Convert the intuitive y-coordinate to actual grid y-coordinate
-        y = start_y + convert_y_coord(intuitive_y)
-        
-        # Place entity at desired location
-        state.set_entity_position(
-            ENTITY_TYPES[entity_type], 
-            ENTITY_COLORS[entity_color],
-            y, 
-            x + start_x
-        )
-        
-        # Update the environment state after each entity placement to ensure it takes effect
-        state_bytes = state.state_bytes
-        if state_bytes is not None:
-            venv.env.callmethod("set_state", [state_bytes])
-
-    # Final reset to ensure all changes are applied
-    venv.reset()
+    if entities:  # Add this check to ensure entities is not None
+        for entity in entities:
+            entity_type = entity["type"]
+            entity_color = entity["color"]
+            intuitive_y, x = entity["position"]
+            
+            # Convert the intuitive y-coordinate to actual grid y-coordinate
+            y = start_y + convert_y_coord(intuitive_y)
+            
+            # Place entity at desired location
+            state.set_entity_position(
+                ENTITY_TYPES[entity_type], 
+                ENTITY_COLORS[entity_color],
+                y, 
+                x + start_x
+            )
+            
+            # Update the environment state after each entity placement to ensure it takes effect
+            state_bytes = state.state_bytes
+            if state_bytes is not None:
+                venv.env.callmethod("set_state", [state_bytes])
 
     return venv
 
@@ -1114,56 +1090,56 @@ def create_example_maze_sequence():
     # 0 = wall, 1 = corridor, 2 = player, 3 = gem, 4 = blue key, 5 = green key, 
     # 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
     # Pattern 1: Initial maze with player and gem
-    pattern1 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 6, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern1 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 6, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
     
-    # Pattern 2: Player moved, gem moved
-    pattern2 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 6, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # # Pattern 2: Player moved, gem moved
+    # pattern2 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 6, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
     
     # Pattern 3: Player moved again, gem moved
-    pattern3 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 6, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern3 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 6, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
 
-    pattern4 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 6, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
-    pattern5 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 6, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern4 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 6, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
+    # pattern5 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 6, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
 
     pattern6 = np.array([
         [0, 0, 0, 0, 0, 0, 0],
@@ -1175,57 +1151,56 @@ def create_example_maze_sequence():
         [0, 0, 0, 2, 0, 0, 0]
     ])
 
-    pattern7 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 6, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern7 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 6, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
 
-    pattern8 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 6, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern8 = np.array([
+    #     [0,    0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 6, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
 
-    pattern9 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 6, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
-    pattern10 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 6, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
+    # pattern9 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 6, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
+    # pattern10 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 6, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
     
-    pattern11 = np.array([
-        [0, 0, 0, 0, 0, 0, 0],
-        [0, 4, 1, 1, 1, 1, 0],
-        [0, 1, 0, 0, 0, 1, 0],
-        [0, 6, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 2, 0, 0, 0]
-    ])
-    
+    # pattern11 = np.array([
+    #     [0, 0, 0, 0, 0, 0, 0],
+    #     [0, 5, 1, 1, 1, 1, 0],
+    #     [0, 1, 0, 0, 0, 1, 0],
+    #     [0, 6, 0, 0, 0, 1, 0],
+    #     [0, 1, 1, 1, 1, 1, 0],
+    #     [0, 0, 0, 1, 0, 0, 0],
+    #     [0, 0, 0, 2, 0, 0, 0]
+    # ])
     # Create sequence of mazes
-    maze_patterns = [pattern1, pattern2, pattern3, pattern4, pattern5, pattern6, pattern7, pattern8, pattern9, pattern10, pattern11]
+    maze_patterns = [ pattern6]
     return create_custom_maze_sequence(maze_patterns)
 
 
