@@ -8,7 +8,7 @@ from tqdm import tqdm
 from utils import heist
 import random
 import imageio
-from utils.steering_experiments import ENTITY_TYPES, ENTITY_COLORS, ordered_layer_names
+from src.utils.environment_modification_experiments import ENTITY_TYPES, ENTITY_COLORS, ordered_layer_names
 
 # %%
 def create_straight_corridor(direction="horizontal", length=9, entity_positions=None):
@@ -303,7 +303,7 @@ def test_environment_generation():
 test_environment_generation()
 # %%
 
-from utils.steering_experiments import create_specific_l_shaped_maze_env
+from src.utils.environment_modification_experiments import create_specific_l_shaped_maze_env
 def test_choice_mazes():
     """
     Test the straight vs L-choice mazes and the new maze permutations
@@ -342,34 +342,52 @@ def test_maze_permutations():
     
     # Test each maze variant with different entity types/colors for variety
     configurations = [
-        (0, "key", "blue"),      # Original L-maze
-        (1, "key", "blue"),     # Flipped horizontally
-        (2, "key", "blue"),    # Flipped vertically
-        (3, "key", "blue"),      # Rotated 180 degrees
-        (4, "key", "blue"),     # S-shaped path
-        (5, "key", "blue"),    # Inverted L
-        (6, "key", "blue"),      # T-junction
-        (7, "key", "blue")      # U-shaped path
+        (0, [{"type": "key", "color": "blue", "position": (2, 2)}]),      # Original L-maze
+        (1, [{"type": "gem", "color": "blue", "position": (2, 6)}]),      # Flipped horizontally
+        (2, [{"type": "key", "color": "green", "position": (0, 2)}]),     # Flipped vertically
+        (3, [{"type": "gem", "color": "red", "position": (2, 6)}]),       # Rotated 180 degrees
+        (4, [{"type": "key", "color": "blue", "position": (1, 2)}]),      # S-shaped path
+        (5, [{"type": "gem", "color": "green", "position": (1, 6)}]),     # Inverted L
+        (6, [{"type": "key", "color": "red", "position": (1, 6)}]),       # T-junction
+        (7, [{"type": "gem", "color": "blue", "position": (3, 1)}])       # U-shaped path
     ]
     
-    for i, (variant, entity_type, entity_color) in enumerate(configurations):
+    for i, (variant, entities) in enumerate(configurations):
         # Create the maze variant
         maze = create_specific_l_shaped_maze_env(
             maze_variant=variant,
-            entity_type=entity_type,
-            entity_color=entity_color
+            entities=entities
         )
+        
+        # Get entity info for the filename
+        entity_info = "_".join([f"{e['type']}_{e['color']}" for e in entities])
         
         # Visualize and save
         visualize_environment(
             maze, 
-            f"maze_permutations/variant_{variant}_{entity_type}_{entity_color}.png"
+            f"maze_permutations/variant_{variant}_{entity_info}.png"
         )
         
         # Close the environment
         maze.close()
-        
-    print(f"Generated 8 maze permutations in the 'maze_permutations' directory")
+    
+    # Test a maze with multiple entities
+    multi_entity_maze = create_specific_l_shaped_maze_env(
+        maze_variant=0,
+        entities=[
+            {"type": "key", "color": "blue", "position": (1, 2)},
+            {"type": "key", "color": "red", "position": (6, 4)}
+        ]
+    )
+    
+    visualize_environment(
+        multi_entity_maze,
+        "maze_permutations/multi_entity_maze.png"
+    )
+    
+    multi_entity_maze.close()
+    
+    print(f"Generated maze permutations in the 'maze_permutations' directory")
 
 # %%
 # Run this to test all maze permutations
