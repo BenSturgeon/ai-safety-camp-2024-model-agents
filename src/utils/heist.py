@@ -8,8 +8,6 @@ import os
 import gym
 import random
 import numpy as np
-import procgen
-from procgen import ProcgenGym3Env
 import imageio
 import matplotlib.pyplot as plt
 import typing

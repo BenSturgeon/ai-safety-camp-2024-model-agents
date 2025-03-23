@@ -153,34 +153,6 @@ def generate_action(model, obs, is_procgen_env=True):
     return actions.cpu()
 
 
-# @t.no_grad()
-# def generate_action_with_steering(model, observation, steering_vector, is_procgen_env=True):
-#     observation = t.tensor(observation, dtype=t.float32).unsqueeze(0)
-
-#     # Define the steering hook function
-#     def steering_hook(module, input, output):
-#         # Add the steering vector to the output activations
-#         modified_output = output + steering_vector.unsqueeze(0)
-#         return modified_output
-
-#     # Register the steering hook to the 'hidden_fc' layer
-#     named_modules_dict = dict(model.named_modules())
-#     hidden_fc_layer = named_modules_dict['hidden_fc']
-#     steering_handle = hidden_fc_layer.register_forward_hook(steering_hook)
-
-#     # Forward pass with steering
-#     model_output = model(observation)
-
-#     # Remove the steering hook
-#     steering_handle.remove()
-
-
-#     logits = model_output[0].logits  # discard the output of the critic in our actor critic network
-#     probabilities = t.softmax(logits, dim=-1)
-#     action = t.multinomial(probabilities, 1).item()
-#     if is_procgen_env:
-#         return np.array([action])
-#     return action
 
 
 def load_interpretable_model(
@@ -447,9 +419,8 @@ def plot_four_activations_for_layers(
         else:
             plt.show()
 
-
-def plot_layer_channels(activations, layer_name, channel_indices=None, channels_per_plot=None, 
-                       cmap='viridis', save_prefix=None, figsize=(12, 10), layout=None):
+def plot_layer_channels(activations, layer_name, channel_indices=None, channels_per_plot=None,
+                       cmap='viridis', save_prefix=None, figsize=(12, 10), layout=None, return_image=False):
     """
     Plot channels of a layer's activations with flexible layout options.
     
@@ -463,13 +434,15 @@ def plot_layer_channels(activations, layer_name, channel_indices=None, channels_
         save_prefix: If provided, save plots with this prefix instead of displaying
         figsize: Size of the figure (width, height) in inches
         layout: Tuple (rows, cols) for the grid layout. If None, calculated automatically.
+        return_image: If True, returns the figure instead of displaying/saving it
         
     Returns:
-        None
+        If return_image is True, returns the matplotlib figure object
+        Otherwise returns None
     """
     if layer_name not in activations:
         print(f"Layer '{layer_name}' not found in activations!")
-        return
+        return None
     
     # Get activation tensor for the layer
     activation = activations[layer_name]
@@ -487,7 +460,7 @@ def plot_layer_channels(activations, layer_name, channel_indices=None, channels_
             channel_indices = [i for i in channel_indices if 0 <= i < num_channels]
             if not channel_indices:
                 print(f"No valid channel indices provided for layer {layer_name}")
-                return
+                return None
         
         # Determine layout constraints
         if layout is not None:
@@ -556,8 +529,9 @@ def plot_layer_channels(activations, layer_name, channel_indices=None, channels_
             plt.suptitle(f"Layer: {layer_name} (Plot {plot_idx+1}/{num_plots})", 
                          fontsize=16, y=0.98)
             
-            # Save or show the plot
-            if save_prefix:
+            if return_image:
+                return fig
+            elif save_prefix:
                 plt.savefig(f"{save_prefix}_{layer_name}_plot{plot_idx+1}.png", bbox_inches='tight')
                 plt.close()
             else:
@@ -991,86 +965,86 @@ def create_objective_activation_dataset(dataset, model, layer_paths):
     return activation_dataset
 
 
-# class ModelActivations:
-#     def __init__(self, model):
-#         self.activations = {}
-#         self.model = model
-#         self.hooks = []  # To keep track of hooks
+class ModelActivations:
+    def __init__(self, model):
+        self.activations = {}
+        self.model = model
+        self.hooks = []  # To keep track of hooks
 
-#     def clear_hooks(self):
-#         # Remove all previously registered hooks
-#         for hook in self.hooks:
-#             hook.remove()
-#         self.hooks = []
-#         self.activations = {}
+    def clear_hooks(self):
+        # Remove all previously registered hooks
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+        self.activations = {}
 
-#     def get_activation(self, name):
-#         def hook(model, input, output):
-#             processed_output = []
-#             for item in output:
-#                 if isinstance(item, t.Tensor):
-#                     processed_output.append(item.detach())
-#                 elif isinstance(item, t.distributions.Categorical):
-#                     processed_output.append(item.logits.detach())
-#                 else:
-#                     processed_output.append(item)
-#             self.activations[name] = tuple(processed_output)
+    def get_activation(self, name):
+        def hook(model, input, output):
+            processed_output = []
+            for item in output:
+                if isinstance(item, t.Tensor):
+                    processed_output.append(item.detach())
+                elif isinstance(item, t.distributions.Categorical):
+                    processed_output.append(item.logits.detach())
+                else:
+                    processed_output.append(item)
+            self.activations[name] = tuple(processed_output)
 
-#         return hook
+        return hook
 
-#     def register_hook_by_path(self, path, name):
-#         elements = path.split(".")
-#         model = self.model
-#         for i, element in enumerate(elements):
-#             if "[" in element:
-#                 base, index = element.replace("]", "").split("[")
-#                 index = int(index)
-#                 model = getattr(model, base)[index]
-#             else:
-#                 model = getattr(model, element)
-#             if i == len(elements) - 1:
-#                 hook = model.register_forward_hook(self.get_activation(name))
-#                 self.hooks.append(hook)  # Keep track of the hook
+    def register_hook_by_path(self, path, name):
+        elements = path.split(".")
+        model = self.model
+        for i, element in enumerate(elements):
+            if "[" in element:
+                base, index = element.replace("]", "").split("[")
+                index = int(index)
+                model = getattr(model, base)[index]
+            else:
+                model = getattr(model, element)
+            if i == len(elements) - 1:
+                hook = model.register_forward_hook(self.get_activation(name))
+                self.hooks.append(hook)  # Keep track of the hook
 
-#     def run_with_cache(self, input, layer_paths):
-#         self.clear_hooks()  # Clear any existing hooks
-#         self.activations = {}  # Reset activations
+    def run_with_cache(self, input, layer_paths):
+        self.clear_hooks()  # Clear any existing hooks
+        self.activations = {}  # Reset activations
 
-#         # Handle edge case: input is not a tensor
-#         if not isinstance(input, t.Tensor):
-#             input = t.tensor(input, dtype=t.float32)
+        # Handle edge case: input is not a tensor
+        if not isinstance(input, t.Tensor):
+            input = t.tensor(input, dtype=t.float32)
 
-#         # Check the shape of the input and reshape if necessary
-#         if input.shape == t.Size([1, 3, 64, 64]):
-#             input = input.squeeze(0)  # Remove the batch dimension
-#         if input.shape == t.Size([3, 64, 64]):
-#             input = input.permute(1, 2, 0)  # Switch dimensions to (64, 64, 3)
+        # Check the shape of the input and reshape if necessary
+        if input.shape == t.Size([1, 3, 64, 64]):
+            input = input.squeeze(0)  # Remove the batch dimension
+        if input.shape == t.Size([3, 64, 64]):
+            input = input.permute(1, 2, 0)  # Switch dimensions to (64, 64, 3)
 
-#         # Handle edge case: empty layer_paths
-#         if not layer_paths:
-#             output = self.model(input)
-#             return output, self.activations
+        # Handle edge case: empty layer_paths
+        if not layer_paths:
+            output = self.model(input)
+            return output, self.activations
 
-#         # Register hooks for each layer path
-#         if isinstance(layer_paths, str):
-#             layer_paths = [layer_paths]
+        # Register hooks for each layer path
+        if isinstance(layer_paths, str):
+            layer_paths = [layer_paths]
 
-#         for path in layer_paths:
-#             try:
-#                 self.register_hook_by_path(path, path.replace(".", "_"))
-#             except AttributeError:
-#                 print(
-#                     f"Warning: Layer '{path}' not found in the model. Skipping hook registration."
-#                 )
+        for path in layer_paths:
+            try:
+                self.register_hook_by_path(path, path.replace(".", "_"))
+            except AttributeError:
+                print(
+                    f"Warning: Layer '{path}' not found in the model. Skipping hook registration."
+                )
 
-#         # Add batch dimension if missing
-#         if input.dim() == 3:
-#             input = input.unsqueeze(0)
+        # Add batch dimension if missing
+        if input.dim() == 3:
+            input = input.unsqueeze(0)
 
-#         # Run the model with the registered hooks
-#         output = self.model(input)
+        # Run the model with the registered hooks
+        output = self.model(input)
 
-#         return output, self.activations
+        return output, self.activations
 
 
 @t.no_grad()
