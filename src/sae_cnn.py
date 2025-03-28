@@ -92,7 +92,7 @@ layer_sae_hparams = {
     "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
     "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-4},
     "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
-    "conv4a":   {"expansion_factor": 4, "l1_coeff": 5e-5},
+    "conv4a":   {"expansion_factor": 0.625, "l1_coeff": 5e-3},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc3":      {"expansion_factor": 4, "l1_coeff": 1e-5},
@@ -516,7 +516,7 @@ def generate_batch_activations_parallel(
             outputs, activations = model_activations.run_with_cache(observations, layer_name)
         layer_activation = activations[layer_name.replace(".", "_")]
 
-        activation_buffer.append(layer_activation.cpu())
+        activation_buffer.append(layer_activation)
         obs_buffer.append(observations.cpu())
 
         logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
@@ -1042,3 +1042,67 @@ def compute_global_stats_for_all_layers(
             num_envs=num_envs,
             save_dir=save_dir,
         )
+
+def get_sae_activations(model, sae_model, layer_number, observation):
+    """
+    Get SAE activations by running observation through the model and SAE
+    
+    Args:
+        model: The base model
+        sae_model: The SAE model 
+        layer_number: The layer number to extract activations from
+        observation: The input observation tensor or numpy array
+        
+    Returns:
+        Dictionary containing:
+            'original_activations': The original layer activations
+            'sae_features': The SAE features (encoded activations)
+    """
+    device = next(model.parameters()).device
+    model.eval()
+    sae_model.eval()
+    sae_model.to(device)
+    
+    layer_name = ordered_layer_names[layer_number]
+    layer_activations = []
+    
+    def activation_hook(module, input, output):
+        layer_activations.append(output.detach())
+    
+    elements = layer_name.split(".")
+    module = model
+    for element in elements:
+        if "[" in element and "]" in element:
+            base, idx = element.split("[")
+            idx = int(idx[:-1])
+            module = getattr(module, base)[idx]
+        else:
+            module = getattr(module, element)
+    
+    handle = module.register_forward_hook(activation_hook)
+    
+    if isinstance(observation, np.ndarray):
+        if observation.ndim == 4:
+            observation = torch.tensor(observation, dtype=torch.float32).to(device)
+        else:
+            observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0).to(device)
+    
+    if observation.shape[1] == 3 and observation.ndim == 4:
+        rgb_obs = observation
+    else:
+        rgb_obs = observation.permute(0, 3, 1, 2) if observation.ndim == 4 else observation
+    
+    with torch.no_grad():
+        outputs = model(rgb_obs)
+    
+    original_activations = layer_activations[0]
+    handle.remove()
+    
+    sae_features = None
+    with torch.no_grad():
+        _, _, sae_features, _ = sae_model(original_activations)
+    
+    return {
+        'original_activations': original_activations.cpu(),
+        'sae_features': sae_features.cpu()
+    }
