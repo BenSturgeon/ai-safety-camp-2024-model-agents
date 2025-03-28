@@ -12,9 +12,9 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default="../model_interpretable.pt",
                         help="Path to the model checkpoint")
     parser.add_argument("--sae_path", type=str, 
-                        default="checkpoints/layer_6_conv3a/sae_checkpoint_step_1000000.pt",
+                        default="checkpoints/layer_6_conv3a/sae_checkpoint_step_5000000.pt",
                         help="Path to the SAE checkpoint")
-    parser.add_argument("--layer", type=int, default=8,
+    parser.add_argument("--layer", type=int, default=6,
                         help="Layer number to target (default: 6 for conv3a)")
     parser.add_argument("--layer_name", type=str, default=None,
                         help="Direct layer name (e.g., 'conv3a', 'conv4a') - overrides --layer if provided")
@@ -25,10 +25,16 @@ def parse_args():
     parser.add_argument("--analyze", action="store_true",
                         help="Run direction channel analysis before interventions")
     
+    # Entity configuration
+    parser.add_argument("--entity1_code", type=int, default=4, choices=[3,4,5,6,7,8,9],
+                        help="Primary entity code to use in the maze (default: 4, blue key)")
+    parser.add_argument("--entity2_code", type=int, default=None, choices=[None,3,4,5,6,7,8,9],
+                        help="Secondary entity code (optional)")
+    
     # Experiment settings
     parser.add_argument("--maze_variant", type=int, default=0,
                         help="Maze variant to use (0-7, default: 0)")
-    parser.add_argument("--max_steps", type=int, default=20,
+    parser.add_argument("--max_steps", type=int, default=25,
                         help="Maximum number of steps to run")
     parser.add_argument("--save_gif_freq", type=int, default=1,
                         help="Save every Nth timestep in activation GIFs (1=all frames, 2=every other frame, etc.)")
@@ -97,16 +103,13 @@ def parse_multi_channels(args):
         value = float(args.value)
         values = [value] * len(channels)
     
-    # Parse radii
     if ',' in args.radius:
-        # Multiple radii provided
         radii = list(map(int, args.radius.split(',')))
     else:
-        # Single radius, replicate for all channels
         radius = int(args.radius)
         radii = [radius] * len(channels)
     
-    # Ensure all lists have the same length
+
     n_channels = len(channels)
     if len(positions) < n_channels:
         positions.extend([positions[-1]] * (n_channels - len(positions)))
@@ -115,12 +118,11 @@ def parse_multi_channels(args):
     if len(radii) < n_channels:
         radii.extend([radii[-1]] * (n_channels - len(radii)))
     
-    # Truncate lists if needed
     positions = positions[:n_channels]
     values = values[:n_channels]
     radii = radii[:n_channels]
     
-    # Create configuration list
+
     config = []
     for i in range(n_channels):
         config.append({
@@ -136,16 +138,15 @@ def main():
     """Main function to run experiments"""
     args = parse_args()
     
-    # Create output directory
-    os.makedirs(args.output, exist_ok=True)
+    base_output = args.output
+    
+    os.makedirs(base_output, exist_ok=True)
     
     # Determine layer information
     layer_number = args.layer
     if args.layer_name:
         # If layer_name is directly provided, find the corresponding index
         try:
-            # Fix: ordered_layer_names is a dictionary, not a list
-            # We need to search through its values to find the matching layer name
             matching_layers = [(idx, name) for idx, name in ordered_layer_names.items() 
                               if name == args.layer_name or name.endswith(args.layer_name)]
             
@@ -193,124 +194,84 @@ def main():
         print("Analyzing direction-responsive channels...")
         direction_channels = experiment.analyze_activation_patterns(
             maze_variants=[0, 1, 2, 3, 4, 5, 6, 7],
-            output_path=args.output
+            output_path=base_output
         )
     
     # Configure intervention based on arguments
     if args.baseline:
-        print("Running baseline without intervention")
+        print("Running baseline experiment without intervention...")
         experiment.disable_intervention()
+        results = experiment.run_maze_experiment(
+            maze_variant=args.maze_variant,
+            max_steps=args.max_steps,
+            save_gif=True,
+            output_path=base_output,
+            save_gif_freq=args.save_gif_freq,
+            max_gif_frames=args.max_gif_frames,
+            entity1_code=args.entity1_code,
+            entity2_code=args.entity2_code
+        )
     
     elif args.static:
-        # Parse multi-channel configurations
+        print("Running static intervention experiment...")
         config = parse_multi_channels(args)
-        channels_str = ', '.join([str(cfg["channel"]) for cfg in config])
-        positions_str = ', '.join([str(cfg["position"]) for cfg in config])
-        print(f"Running static intervention on channels {channels_str} at positions {positions_str}")
         experiment.set_intervention(config)
+        results = experiment.run_maze_experiment(
+            maze_variant=args.maze_variant,
+            max_steps=args.max_steps,
+            save_gif=True,
+            output_path=base_output,
+            save_gif_freq=args.save_gif_freq,
+            max_gif_frames=args.max_gif_frames,
+            entity1_code=args.entity1_code,
+            entity2_code=args.entity2_code
+        )
     
     elif args.dynamic:
-        # Create trajectory-based intervention
+        print("Running dynamic intervention experiment...")
+        
+        # Parse positions
         start_pos = parse_position(args.start_pos)
         target_pos = parse_position(args.target_pos)
-        print(f"Running dynamic intervention from {start_pos} to {target_pos}")
         
-        # Parse channels (support multiple channels)
-        channels = list(map(int, args.channel.split(',')))
+        # First channel from --channel or default to 95
+        channel = int(args.channel.split(",")[0])
+        value = float(args.value.split(",")[0])
+        radius = int(args.radius.split(",")[0])
         
-        # Parse values
-        if ',' in args.value:
-            values = list(map(float, args.value.split(',')))
-        else:
-            value = float(args.value)
-            values = [value] * len(channels)
-            
-        # Parse radii
-        if ',' in args.radius:
-            radii = list(map(int, args.radius.split(',')))
-        else:
-            radius = int(args.radius)
-            radii = [radius] * len(channels)
+        # Create dynamic intervention
+        dynamic_intervention = create_trajectory_based_intervention(
+            channel=channel,
+            start_pos=start_pos,
+            target_pos=target_pos,
+            max_steps=args.traj_steps,
+            value=value,
+            radius=radius
+        )
         
-        # Ensure all lists have the same length
-        n_channels = len(channels)
-        if len(values) < n_channels:
-            values.extend([values[-1]] * (n_channels - len(values)))
-        if len(radii) < n_channels:
-            radii.extend([radii[-1]] * (n_channels - len(radii)))
-            
-        # Truncate if needed
-        values = values[:n_channels]
-        radii = radii[:n_channels]
-        
-        # Create dynamic interventions for each channel
-        dynamic_interventions = []
-        for i in range(n_channels):
-            dynamic_interventions.append(create_trajectory_based_intervention(
-                channel=channels[i],
-                start_pos=start_pos,
-                target_pos=target_pos,
-                max_steps=args.traj_steps,
-                value=values[i],
-                radius=radii[i]
-            ))
-        
-        # Combine interventions
-        def combined_intervention(step, original_activations, modified_activations):
-            result = modified_activations.clone()
-            for intervention in dynamic_interventions:
-                result = intervention(step, original_activations, result)
-            return result
-            
-        experiment.set_dynamic_intervention(combined_intervention)
+        experiment.set_dynamic_intervention(dynamic_intervention)
+        results = experiment.run_maze_experiment(
+            maze_variant=args.maze_variant,
+            max_steps=args.max_steps,
+            save_gif=True,
+            output_path=base_output,
+            save_gif_freq=args.save_gif_freq,
+            max_gif_frames=args.max_gif_frames,
+            entity1_code=args.entity1_code,
+            entity2_code=args.entity2_code
+        )
     
-    elif args.direction:
-        # First make sure we have direction channels
-        if direction_channels is None:
-            direction_channels = experiment.analyze_activation_patterns(
-                maze_variants=[0, 1, 2, 3, 4, 5, 6, 7],
-                output_path=args.output
-            )
         
-        # Get top channel for the specified direction
-        if args.direction in direction_channels and direction_channels[args.direction]:
-            channel = direction_channels[args.direction][0]["channel"]
-        else:
-            print(f"No channels found for direction '{args.direction}', falling back to channel {args.channel.split(',')[0]}")
-            channel = int(args.channel.split(',')[0])
-        
-        # Configure intervention based on direction
-        position_map = {
-            "right": (4, 6),
-            "left": (4, 2),
-            "up": (2, 4),
-            "down": (6, 4)
-        }
-        position = position_map[args.direction]
-        # Use value and radius from args (first value if multiple)
-        value = float(args.value.split(',')[0])
-        radius = int(args.radius.split(',')[0]) 
-        config = [{"channel": channel, "position": position, "value": value, "radius": radius}]
-        print(f"Running {args.direction} intervention on channel {channel} at position {position}")
-        experiment.set_intervention(config)
-    
-    # Run experiment
-    result = experiment.run_maze_experiment(
-        maze_variant=args.maze_variant,
-        max_steps=args.max_steps,
-        save_gif=True,
-        output_path=args.output,
-        save_gif_freq=args.save_gif_freq,
-        max_gif_frames=args.max_gif_frames
-    )
+
     
     # Print results
     print("\nExperiment Results:")
-    print(f"Total steps: {result['total_steps']}")
-    print(f"Total reward: {result['total_reward']}")
-    print(f"Intervention type: {result['intervention_type']}")
+    print(f"Total steps: {results['total_steps']}")
+    print(f"Total reward: {results['total_reward']}")
+    print(f"Intervention type: {results['intervention_type']}")
+    print(f"Output saved to: {results['output_path']}")
     
-    return result
+    return results
 
 if __name__ == "__main__":
     main() 
