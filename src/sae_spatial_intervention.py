@@ -3,7 +3,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import imageio
-from utils.environment_modification_experiments import create_specific_l_shaped_maze_env
+from utils.environment_modification_experiments import create_specific_l_shaped_maze_env, create_box_maze
 from utils import helpers
 from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 
@@ -63,6 +63,8 @@ class SAEInterventionExperiment:
         with torch.no_grad():
             output = output.to(self.device)
             self.sae.to(self.device)
+            
+            # Get original SAE activations
             _, _, acts, _ = self.sae(output)
             
             # Store original activations
@@ -71,7 +73,7 @@ class SAEInterventionExperiment:
             
             # Apply static intervention if active
             if self.intervention_active and self.intervention_config:
-                modified_acts = acts.clone()
+                modified_acts = acts.clone()  # Start with a copy of the original activations
                 
                 # Apply the modification at specific positions
                 for config in self.intervention_config:
@@ -80,6 +82,10 @@ class SAEInterventionExperiment:
                     value = config["value"]
                     scale_factor = config.get("scale_factor", 1.0)
                     radius = config.get("radius", 0)
+                    
+                    # Create a new zeros tensor for the entire channel
+                    channel_shape = modified_acts[0, channel].shape
+                    modified_acts[0, channel] = torch.zeros(channel_shape, device=self.device)
                     
                     # Single point modification
                     if radius == 0:
@@ -114,8 +120,12 @@ class SAEInterventionExperiment:
                 # Store modified activations
                 self.modified_sae_activations.append(modified_acts.squeeze().cpu())
                 
-                # Return the original output (modification happens through the activations)
-                return output
+                # Use the decoder part of the SAE to get the reconstruction
+                # The decoder in ConvSAE is the conv_dec layer
+                reconstructed_output = self.sae.conv_dec(modified_acts)
+                
+                # Return the modified reconstruction to affect the model's behavior
+                return reconstructed_output
             
             # Apply dynamic intervention if provided
             elif self.dynamic_intervention is not None:
@@ -132,9 +142,13 @@ class SAEInterventionExperiment:
                 # Store modified activations
                 self.modified_sae_activations.append(modified_acts.squeeze().cpu())
                 
-                # Return the original output (modification happens through the activations)
-                return output
+                # Use the decoder to get reconstructed output
+                reconstructed_output = self.sae.conv_dec(modified_acts)
+                
+                # Return the modified reconstructions
+                return reconstructed_output
             
+            # If no intervention, just return the original output
             return output
 
     def set_intervention(self, config):
@@ -176,7 +190,7 @@ class SAEInterventionExperiment:
     
     def run_maze_experiment(self, maze_variant=0, max_steps=100, save_gif=True, 
                            output_path="maze_intervention_results", save_gif_freq=1,
-                           max_gif_frames=0):
+                           max_gif_frames=0, entity1_code=4, entity2_code=None):
         """
         Run an experiment with a specific maze variant.
         
@@ -187,13 +201,46 @@ class SAEInterventionExperiment:
             output_path (str): Directory to save results
             save_gif_freq (int): Save every Nth timestep in activation GIFs (default: 1 = all frames)
             max_gif_frames (int): Maximum number of frames to include in GIFs (0=all frames)
+            entity1_code (int): Code of primary entity to track (default: 4, blue key)
+            entity2_code (int): Code of secondary entity (optional)
             
         Returns:
             dict: Results of the experiment
         """
-        # Create maze environment
-        print(f"Creating maze variant {maze_variant}")
-        venv = create_specific_l_shaped_maze_env(maze_variant=maze_variant)
+        # Modify output path to include entity code and layer information
+        entity_code_description = {
+            3: "gem",
+            4: "blue_key",
+            5: "green_key",
+            6: "red_key",
+            7: "blue_lock",
+            8: "green_lock",
+            9: "red_lock"
+        }
+        
+        # Get entity description for the folder name
+        entity_desc = entity_code_description.get(entity1_code, f"entity_{entity1_code}")
+        
+        # Create directory structure: intervention_results/[layer_name]_sae/entity_[code]_[description]
+        layer_specific_output = f"{output_path}/{self.layer_name}_sae"
+        
+        # Create entity-specific subfolder
+        entity_specific_output = f"{layer_specific_output}/entity_{entity1_code}_{entity_desc}"
+        
+        # Create output directory
+        os.makedirs(entity_specific_output, exist_ok=True)
+        
+        print(f"Saving results to: {entity_specific_output}")
+        
+        # Create maze environment with specified entities
+        # if maze_variant >= 0 and maze_variant <= 7:
+        print(f"Creating maze variant {maze_variant} with entity1_code={entity1_code}, entity2_code={entity2_code}")
+        obs, venv = create_box_maze(entity1_code,entity2_code)
+        # else:
+        #     # Use create_example_maze_sequence for custom maze with specified entities
+        #     print(f"Creating example maze sequence with entity1_code={entity1_code}, entity2_code={entity2_code}")
+        #     observations, venv = create_example_maze_sequence(entity1=entity1_code, entity2=entity2_code)
+        #     # We'll ignore the observations returned by create_example_maze_sequence
         
         # Reset buffers
         self.sae_activations = []
@@ -270,7 +317,7 @@ class SAEInterventionExperiment:
         
         # Save results
         if save_gif and frames:
-            os.makedirs(output_path, exist_ok=True)
+            os.makedirs(entity_specific_output, exist_ok=True)
             
             # Create descriptive filename
             if intervention_type == "static":
@@ -281,15 +328,15 @@ class SAEInterventionExperiment:
             else:
                 filename = f"maze_{maze_variant}_baseline"
             
-            gif_path = f"{output_path}/{filename}.gif"
+            gif_path = f"{entity_specific_output}/{filename}.gif"
             imageio.mimsave(gif_path, frames, fps=10)
             print(f"Saved GIF to {gif_path}")
             
             # Save visualization of activations
             if len(self.sae_activations) > 0:
-                self._visualize_activations(output_path, maze_variant, intervention_type)
+                self._visualize_activations(entity_specific_output, maze_variant, intervention_type)
                 # Also create GIFs of activation changes over time
-                self._create_activation_gifs(output_path, maze_variant, intervention_type, 
+                self._create_activation_gifs(entity_specific_output, maze_variant, intervention_type, 
                                             frames=frames, save_gif_freq=save_gif_freq,
                                             max_gif_frames=max_gif_frames)
         
@@ -298,7 +345,12 @@ class SAEInterventionExperiment:
             "total_steps": steps,
             "total_reward": total_reward,
             "intervention_type": intervention_type,
-            "intervention_config": self.intervention_config
+            "intervention_config": self.intervention_config,
+            "entity1_code": entity1_code,
+            "entity2_code": entity2_code,
+            "output_path": entity_specific_output,
+            "layer_number": self.layer_number,
+            "layer_name": self.layer_name
         }
         
         return results
