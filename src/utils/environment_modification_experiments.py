@@ -1,5 +1,5 @@
-from src.utils import helpers
-from src.utils import heist
+from utils import helpers
+from utils import heist
 import random
 import numpy as np
 import imageio
@@ -1074,134 +1074,372 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
     return observations, venv
 
 
-def create_example_maze_sequence():
+def create_example_maze_sequence(entity1=4, entity2=None):
     """
     Creates an example sequence of maze environments to demonstrate the custom maze functionality.
     
-    This example creates a sequence of three mazes:
-    1. Initial maze with player and blue key
-    2. Same maze but with player moved and blue key replaced by gem
-    3. Same layout but with player moved and a red key added
+    This example creates a sequence showing an entity moving around the maze in a predefined path.
+    
+    Args:
+        entity1 (int): Code for the main entity to track (default: 4, blue key)
+        entity2 (int): Code for a secondary static entity, or None to not include (default: None)
     
     Returns:
         tuple: (observations, venv) - List of observations and final environment
     """
-    # Define three maze patterns (7x7 grids)
-    # 0 = wall, 1 = corridor, 2 = player, 3 = gem, 4 = blue key, 5 = green key, 
-    # 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
-    # Pattern 1: Initial maze with player and gem
-    # pattern1 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 6, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
-    
-    # # Pattern 2: Player moved, gem moved
-    # pattern2 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 6, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
-    
-    # Pattern 3: Player moved again, gem moved
-    # pattern3 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 6, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+    # Define maze patterns (7x7 grids)
+    # 0 = wall, 1 = corridor, 2 = player, 3 = stationary entity, 4 = moving entity
+    # Values: 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
+    patterns = [
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 4, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 4, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 4, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
 
-    # pattern4 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 6, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
-    # pattern5 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 6, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 4, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 4, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 4, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 4, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 4, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 4, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 4, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ]),
+        
+        np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 1, 1, 1, 1, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 4, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0, 0, 0]
+        ])
+    ]
+
+    maze_patterns = []
+
+    for pattern in patterns:
+        modified_pattern = pattern.copy()
+        
+        # Place entity1 (the tracked entity) in positions marked with 4 (these move around the maze)
+        modified_pattern[modified_pattern == 3] = entity1
+        
+        # Handle the secondary entity (stationary in position 3)
+        if entity2 is not None:
+            modified_pattern[modified_pattern == 4] = entity1
+        else:
+            modified_pattern[modified_pattern == 4] = 1  # Replace with corridor
+            
+        maze_patterns.append(modified_pattern)
+
+    return create_custom_maze_sequence(maze_patterns)
+
+
+def create_box_maze(entity1=4, entity2=None):
+    """
+    Creates an example sequence of maze environments to demonstrate the custom maze functionality.
+    
+    This example creates a sequence showing an entity moving around the maze in a predefined path.
+    
+    Args:
+        entity1 (int): Code for the main entity to track (default: 4, blue key)
+        entity2 (int): Code for a secondary static entity, or None to not include (default: None)
+    
+    Returns:
+        tuple: (observations, venv) - List of observations and final environment
+    """
+    # Define maze patterns (7x7 grids)
+    # 0 = wall, 1 = corridor, 2 = player, 3 = first entity, 4 = second entity
+    # Values: 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
+    pattern = np.array([
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 3, 0, 0, 0, 4, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 1, 1, 2]])
+        
+    # Create a copy to modify, ensuring original placeholders are preserved for lookup
+    final_pattern = pattern.copy()
+
+    # Find original locations of placeholders
+    loc_entity1 = (pattern == 3)
+    loc_entity2 = (pattern == 4)
+
+    # Replace placeholder 3 with entity1
+    final_pattern[loc_entity1] = entity1
+
+    # Replace placeholder 4 with entity2 or corridor (1)
+    if entity2 is not None:
+        final_pattern[loc_entity2] = entity2
+    else:
+        final_pattern[loc_entity2] = 1  # Replace with corridor if entity2 is None
+
+
+    return create_custom_maze_sequence([final_pattern])
+
+def create_two_entity_maze(pattern, entity1_type="blue_key", entity2_type="red_key"):
+    """
+    Creates a maze environment with a player and 2 entities.
+    The pattern should use:
+    - 0 for walls
+    - 1 for corridors 
+    - 2 for player position
+    - 4 for first entity position (was 3)
+    - 5 for second entity position (was 4)
+
+    Args:
+        pattern (np.ndarray): 2D numpy array representing maze layout
+        entity1_type (str): Type of first entity ("blue_key", "red_key", "green_key", "gem")
+        entity2_type (str): Type of second entity ("blue_key", "red_key", "green_key", "gem")
+
+    Returns:
+        tuple: (observation, venv) - Initial observation and environment
+    """
+    # Map entity types to their properties
+    entity_type_map = {
+        "blue_key": ("key", "blue"),
+        "red_key": ("key", "red"), 
+        "green_key": ("key", "green"),
+        "gem": ("gem", None)
+    }
+
+    pattern1 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 5, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+    
+    pattern2 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 5, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+    
+    pattern3 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 5, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+
+    pattern4 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 5, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+    
+    pattern5 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 5, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
 
     pattern6 = np.array([
         [0, 0, 0, 0, 0, 0, 0],
         [0, 4, 1, 1, 1, 1, 0],
         [0, 1, 0, 0, 0, 1, 0],
         [0, 1, 0, 0, 0, 1, 0],
-        [0, 1, 1, 1, 1, 6, 0],
+        [0, 1, 1, 1, 1, 5, 0],
         [0, 0, 0, 1, 0, 0, 0],
         [0, 0, 0, 2, 0, 0, 0]
     ])
 
-    # pattern7 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 6, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+    pattern7 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 5, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
 
-    # pattern8 = np.array([
-    #     [0,    0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 6, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+    pattern8 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 1, 5, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
 
-    # pattern9 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 6, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
-    # pattern10 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 6, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+    pattern9 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 5, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
     
-    # pattern11 = np.array([
-    #     [0, 0, 0, 0, 0, 0, 0],
-    #     [0, 5, 1, 1, 1, 1, 0],
-    #     [0, 1, 0, 0, 0, 1, 0],
-    #     [0, 6, 0, 0, 0, 1, 0],
-    #     [0, 1, 1, 1, 1, 1, 0],
-    #     [0, 0, 0, 1, 0, 0, 0],
-    #     [0, 0, 0, 2, 0, 0, 0]
-    # ])
+    pattern10 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 5, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+    
+    pattern11 = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 4, 1, 1, 1, 1, 0],
+        [0, 1, 0, 0, 0, 1, 0],
+        [0, 5, 0, 0, 0, 1, 0],
+        [0, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 2, 0, 0, 0]
+    ])
+    
+ 
     # Create sequence of mazes
-    maze_patterns = [ pattern6]
-    return create_custom_maze_sequence(maze_patterns)
+    maze_patterns = [
+        pattern1, pattern2, pattern3, pattern4, pattern5, pattern6, pattern7, pattern8, 
+        pattern9, pattern10, pattern11
+    ]
+
+    # Find positions of entities
+    entity1_pos = np.where(pattern == 4)  # Changed from 3 to 4
+    entity2_pos = np.where(pattern == 5)  # Changed from 4 to 5
+    player_pos = np.where(pattern == 2)
+
+    # Convert pattern to basic maze (walls and corridors only)
+    maze_pattern = pattern.copy()
+    maze_pattern[pattern > 1] = 1  # Convert all special tiles to corridors
+
+    # Create entities list
+    entities = []
+    if len(entity1_pos[0]) > 0:
+        entity_type, entity_color = entity_type_map[entity1_type]
+        entities.append({
+            "type": entity_type,
+            "color": entity_color,
+            "position": (entity1_pos[0][0], entity1_pos[1][0])
+        })
+    
+    if len(entity2_pos[0]) > 0:
+        entity_type, entity_color = entity_type_map[entity2_type]
+        entities.append({
+            "type": entity_type,
+            "color": entity_color,
+            "position": (entity2_pos[0][0], entity2_pos[1][0])
+        })
+
+    # Create the maze with the pattern and entities
+    player_position = (player_pos[0][0], player_pos[1][0]) if len(player_pos[0]) > 0 else None
+    observations, venv = create_custom_maze_sequence([maze_pattern], entities=[entities], player_positions=[player_position])
+    
+    return observations[0], venv
 
 
 def run_custom_maze_sequence(maze_patterns, save_path=None, render_as_gif=False, fps=5):
