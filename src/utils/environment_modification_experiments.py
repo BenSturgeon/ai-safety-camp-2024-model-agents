@@ -1206,16 +1206,17 @@ def create_example_maze_sequence(entity1=4, entity2=None):
 
     for pattern in patterns:
         modified_pattern = pattern.copy()
-        
-        # Place entity1 (the tracked entity) in positions marked with 4 (these move around the maze)
-        modified_pattern[modified_pattern == 3] = entity1
-        
-        # Handle the secondary entity (stationary in position 3)
+
+        loc_moving_entity = (pattern == 4)
+        loc_stationary_entity = (pattern == 3)
+
+        modified_pattern[loc_moving_entity] = entity1
+
         if entity2 is not None:
-            modified_pattern[modified_pattern == 4] = entity1
+            modified_pattern[loc_stationary_entity] = entity2
         else:
-            modified_pattern[modified_pattern == 4] = 1  # Replace with corridor
-            
+            modified_pattern[loc_stationary_entity] = 1
+
         maze_patterns.append(modified_pattern)
 
     return create_custom_maze_sequence(maze_patterns)
