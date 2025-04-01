@@ -445,16 +445,15 @@ class SAEInterventionExperiment:
         print(f"Creating activation GIFs with sampling frequency {save_gif_freq} "
               f"({len(sampled_activations)} frames out of {len(self.sae_activations)})")
         
-        # Create a grid visualization of all channels
-        self._create_all_channels_grid_gif(
-            sampled_activations, 
-            sampled_modified, 
-            sampled_frames, 
-            save_gif_freq, 
-            gifs_dir,
-            maze_variant, 
-            intervention_type
-        )
+        # self._create_all_channels_grid_gif(
+        #     sampled_activations, 
+        #     sampled_modified, 
+        #     sampled_frames, 
+        #     save_gif_freq, 
+        #     gifs_dir,
+        #     maze_variant, 
+        #     intervention_type
+        # )
         
         # Determine which specific channels to visualize in detail
         channels = []
@@ -474,18 +473,6 @@ class SAEInterventionExperiment:
             top_channels = torch.argsort(channel_variance, descending=True)[:5]
             channels = top_channels.tolist()
             
-        # Also include some fixed channels for comparison across experiments
-        # Only include what the user specified in the configuration
-        if intervention_type == "static" and self.intervention_config:
-            # Just use the channels from the intervention config
-            pass
-        elif intervention_type == "dynamic":
-            # Keep the top variance channels
-            pass
-        else:
-            # For baseline, already have top variance channels
-            pass
-        
         print(f"Creating detailed activation GIFs for channels: {channels}")
         
         # Create GIF for each channel
