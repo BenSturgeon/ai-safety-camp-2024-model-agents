@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import os
+import re # Added import for regex
 from sae_spatial_intervention import SAEInterventionExperiment, create_trajectory_based_intervention
 from sae_cnn import ordered_layer_names
 
@@ -11,15 +12,12 @@ def parse_args():
     # Basic configuration
     parser.add_argument("--model_path", type=str, default="../model_interpretable.pt",
                         help="Path to the model checkpoint")
-    parser.add_argument("--sae_path", type=str, 
-                        default="checkpoints/layer_6_conv3a/sae_checkpoint_step_5000000.pt",
-                        help="Path to the SAE checkpoint")
+    parser.add_argument("--sae_path", type=str, default=None, # Changed default to None
+                        help="Optional: Specific path to the SAE checkpoint. Overrides auto-detection.")
     parser.add_argument("--layer", type=int, default=6,
                         help="Layer number to target (default: 6 for conv3a)")
     parser.add_argument("--layer_name", type=str, default=None,
                         help="Direct layer name (e.g., 'conv3a', 'conv4a') - overrides --layer if provided")
-    parser.add_argument("--sae_step", type=int, default=1000000,
-                        help="Step number for the SAE checkpoint (default: 1000000)")
     parser.add_argument("--output", type=str, default="intervention_results",
                         help="Directory to save results")
     parser.add_argument("--analyze", action="store_true",
@@ -144,6 +142,8 @@ def main():
     
     # Determine layer information
     layer_number = args.layer
+    layer_name = ordered_layer_names.get(layer_number) # Default layer name from number
+    
     if args.layer_name:
         # If layer_name is directly provided, find the corresponding index
         try:
@@ -160,34 +160,68 @@ def main():
             print(f"Warning: Could not find layer with name '{args.layer_name}'. Valid layers are:")
             for idx, name in ordered_layer_names.items():
                 print(f"  {idx}: {name}")
-            print(f"Falling back to layer number {layer_number}")
+            print(f"Falling back to layer number {layer_number} ({ordered_layer_names.get(layer_number)})")
+            layer_name = ordered_layer_names.get(layer_number) # Ensure layer_name is set even on fallback
     
-    # Handle custom SAE path based on layer name
-    sae_path = args.sae_path
-    layer_name = ordered_layer_names.get(layer_number)
-    
-    # Build the path directly from layer_number if available
-    if layer_number in ordered_layer_names:
-        layer_name = ordered_layer_names[layer_number]
-        auto_path = f"checkpoints/layer_{layer_number}_{layer_name}/sae_checkpoint_step_{args.sae_step}.pt"
-        if os.path.exists(auto_path):
-            sae_path = auto_path
-            print(f"Using SAE path: {sae_path} (for layer {layer_name})")
-        else:
-            print(f"Warning: Could not find SAE checkpoint at {auto_path}")
-            print(f"Falling back to provided path: {sae_path}")
+    if not layer_name:
+        print(f"Error: Could not determine a valid layer name for layer number {layer_number}.")
+        return
+
+    # --- Find the latest SAE checkpoint ---
+    sae_path = args.sae_path # Use provided path if specified
+
+    if sae_path:
+        print(f"Using specified SAE path: {sae_path}")
     else:
-        print(f"Warning: Layer number {layer_number} not found in ordered_layer_names")
-        print(f"Using provided path: {sae_path}")
-    
+        print(f"Attempting to find latest SAE checkpoint for layer {layer_number} ({layer_name})...")
+        checkpoint_dir = f"checkpoints/layer_{layer_number}_{layer_name}"
+        latest_step = -1
+        
+        if os.path.isdir(checkpoint_dir):
+            try:
+                # Regex to find checkpoint files and extract step number
+                checkpoint_pattern = re.compile(r"sae_checkpoint_step_(\d+)\.pt")
+                max_step = -1
+                
+                for filename in os.listdir(checkpoint_dir):
+                    match = checkpoint_pattern.match(filename)
+                    if match:
+                        step = int(match.group(1))
+                        if step > max_step:
+                            max_step = step
+                            
+                if max_step != -1:
+                    latest_step = max_step
+                    sae_path = os.path.join(checkpoint_dir, f"sae_checkpoint_step_{latest_step}.pt")
+                    print(f"Found latest checkpoint at step {latest_step}: {sae_path}")
+                else:
+                    print(f"Warning: No SAE checkpoint files found in {checkpoint_dir}.")
+                    
+            except Exception as e:
+                print(f"Warning: Error scanning directory {checkpoint_dir}: {e}")
+        else:
+            print(f"Warning: Checkpoint directory not found: {checkpoint_dir}")
+
+        if not sae_path:
+            print("Error: Could not automatically determine SAE path. Please specify with --sae_path.")
+            return
+    # --- End find latest checkpoint ---
+
     # Create experiment
     print(f"Creating experiment with layer {layer_number} ({layer_name})")
-    experiment = SAEInterventionExperiment(
-        model_path=args.model_path,
-        sae_checkpoint_path=sae_path,
-        layer_number=layer_number
-    )
-    
+    try:
+        experiment = SAEInterventionExperiment(
+            model_path=args.model_path,
+            sae_checkpoint_path=sae_path, # Use the determined path
+            layer_number=layer_number
+        )
+    except FileNotFoundError:
+        print(f"Error: SAE checkpoint file not found at {sae_path}. Please check the path.")
+        return
+    except Exception as e:
+        print(f"Error loading SAE or model: {e}")
+        return
+
     # Analyze channels if requested
     direction_channels = None
     if args.analyze:
