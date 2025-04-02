@@ -92,7 +92,7 @@ layer_sae_hparams = {
     "conv2a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
     "conv2b":   {"expansion_factor": 4, "l1_coeff": 5e-4},
     "conv3a":   {"expansion_factor": 4, "l1_coeff": 5e-4},
-    "conv4a":   {"expansion_factor": 0.625, "l1_coeff": 5e-3},
+    "conv4a":   {"expansion_factor": 4, "l1_coeff": 5e-3},
     "fc1":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc2":      {"expansion_factor": 4, "l1_coeff": 1e-5},
     "fc3":      {"expansion_factor": 4, "l1_coeff": 1e-5},
