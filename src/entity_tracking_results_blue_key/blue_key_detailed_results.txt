@@ -1,0 +1,218 @@
+================================================================================
+ENTITY TRACKING EXPERIMENT REPORT - BLUE KEY
+================================================================================
+
+CONFIGURATION:
+Entity tracked: Blue Key (entity code 4)
+Mode: SAE activations
+
+METRICS USED:
+- Spatial overlap (IOU): How much activation overlaps with entity position
+- Equivariance: How well activation movement matches entity movement
+- TopK Activation Ratio: Ratio of activation in entity region vs. elsewhere
+- Signal-to-Noise Ratio (SNR): Mean activation in entity region vs. background noise
+
+RESULTS BY LAYER:
+
+[Layer conv1a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 6: IOU score = 0.0192
+  2. Channel 14: IOU score = 0.0135
+  3. Channel 19: IOU score = 0.0046
+  4. Channel 5: IOU score = 0.0036
+  5. Channel 10: IOU score = 0.0035
+  6. Channel 11: IOU score = 0.0031
+  7. Channel 30: IOU score = 0.0030
+  8. Channel 13: IOU score = 0.0030
+  9. Channel 18: IOU score = 0.0029
+  10. Channel 23: IOU score = 0.0029
+
+Top channels by TopK activation ratio:
+  1. Channel 19: TopK ratio = 0.0056
+  2. Channel 14: TopK ratio = 0.0047
+  3. Channel 10: TopK ratio = 0.0044
+  4. Channel 13: TopK ratio = 0.0040
+  5. Channel 11: TopK ratio = 0.0036
+  6. Channel 23: TopK ratio = 0.0036
+  7. Channel 2: TopK ratio = 0.0029
+  8. Channel 3: TopK ratio = 0.0027
+  9. Channel 9: TopK ratio = 0.0024
+  10. Channel 30: TopK ratio = 0.0024
+
+Top channels by Signal-to-Noise Ratio (SNR):
+  1. Channel 6: SNR = 183.0493
+  2. Channel 22: SNR = 2.1911
+  3. Channel 18: SNR = 1.7860
+  4. Channel 19: SNR = 1.5572
+  5. Channel 29: SNR = 1.4034
+  6. Channel 14: SNR = 1.3444
+  7. Channel 5: SNR = 1.1446
+  8. Channel 2: SNR = 1.0939
+  9. Channel 3: SNR = 1.0349
+  10. Channel 13: SNR = 1.0312
+
+Top equivariant channels (activations move with entity):
+  1. Channel 5: equivariance = 0.9829 (-)
+  2. Channel 15: equivariance = nan (-)
+  3. Channel 25: equivariance = 0.9827 (-)
+  4. Channel 23: equivariance = 0.9816 (-)
+  5. Channel 19: equivariance = 0.9788 (-)
+  6. Channel 9: equivariance = 0.9786 (+)
+  7. Channel 2: equivariance = 0.9785 (-)
+  8. Channel 13: equivariance = 0.9772 (-)
+  9. Channel 0: equivariance = 0.9760 (+)
+  10. Channel 8: equivariance = 0.9752 (+)
+
+------------------------------------------------------------
+
+[Layer conv3a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 67: IOU score = 0.2443
+  2. Channel 21: IOU score = 0.2441
+  3. Channel 110: IOU score = 0.2254
+  4. Channel 71: IOU score = 0.2230
+  5. Channel 70: IOU score = 0.2198
+  6. Channel 115: IOU score = 0.2171
+  7. Channel 101: IOU score = 0.2078
+  8. Channel 13: IOU score = 0.2003
+  9. Channel 89: IOU score = 0.1940
+  10. Channel 84: IOU score = 0.1844
+
+Top channels by TopK activation ratio:
+  1. Channel 101: TopK ratio = 0.2327
+  2. Channel 110: TopK ratio = 0.2291
+  3. Channel 21: TopK ratio = 0.2218
+  4. Channel 67: TopK ratio = 0.2218
+  5. Channel 115: TopK ratio = 0.2145
+  6. Channel 71: TopK ratio = 0.1891
+  7. Channel 13: TopK ratio = 0.1818
+  8. Channel 45: TopK ratio = 0.1818
+  9. Channel 0: TopK ratio = 0.1782
+  10. Channel 70: TopK ratio = 0.1782
+
+Top channels by Signal-to-Noise Ratio (SNR):
+  1. Channel 110: SNR = 39.7364
+  2. Channel 115: SNR = 23.3608
+  3. Channel 84: SNR = 11.8333
+  4. Channel 117: SNR = 6.9043
+  5. Channel 96: SNR = 6.2275
+  6. Channel 55: SNR = 5.7619
+  7. Channel 0: SNR = 5.6820
+  8. Channel 120: SNR = 5.4756
+  9. Channel 39: SNR = 4.8114
+  10. Channel 13: SNR = 4.7206
+
+Top equivariant channels (activations move with entity):
+  1. Channel 1: equivariance = 0.9410 (+)
+  2. Channel 2: equivariance = 0.6879 (+)
+  3. Channel 3: equivariance = nan (-)
+  4. Channel 5: equivariance = 0.8649 (+)
+  5. Channel 7: equivariance = nan (-)
+  6. Channel 9: equivariance = nan (-)
+  7. Channel 10: equivariance = 0.7436 (+)
+  8. Channel 11: equivariance = nan (-)
+  9. Channel 12: equivariance = nan (-)
+  10. Channel 15: equivariance = nan (-)
+
+------------------------------------------------------------
+
+[Layer conv4a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 2: IOU score = 0.5055
+  2. Channel 112: IOU score = 0.4852
+  3. Channel 25: IOU score = 0.4105
+  4. Channel 124: IOU score = 0.4026
+  5. Channel 52: IOU score = 0.3980
+  6. Channel 80: IOU score = 0.3898
+  7. Channel 56: IOU score = 0.3893
+  8. Channel 97: IOU score = 0.3784
+  9. Channel 104: IOU score = 0.3692
+  10. Channel 120: IOU score = 0.3673
+
+Top channels by TopK activation ratio:
+  1. Channel 112: TopK ratio = 0.8485
+  2. Channel 2: TopK ratio = 0.8182
+  3. Channel 25: TopK ratio = 0.7424
+  4. Channel 52: TopK ratio = 0.7273
+  5. Channel 56: TopK ratio = 0.7121
+  6. Channel 97: TopK ratio = 0.6970
+  7. Channel 117: TopK ratio = 0.6818
+  8. Channel 80: TopK ratio = 0.6667
+  9. Channel 124: TopK ratio = 0.6667
+  10. Channel 54: TopK ratio = 0.6364
+
+Top channels by Signal-to-Noise Ratio (SNR):
+  1. Channel 121: SNR = 16.2619
+  2. Channel 101: SNR = 14.2538
+  3. Channel 35: SNR = 9.8232
+  4. Channel 117: SNR = 9.5686
+  5. Channel 2: SNR = 9.4967
+  6. Channel 25: SNR = 9.4653
+  7. Channel 112: SNR = 9.3273
+  8. Channel 55: SNR = 8.8986
+  9. Channel 97: SNR = 6.8727
+  10. Channel 80: SNR = 6.8315
+
+Top equivariant channels (activations move with entity):
+  1. Channel 0: equivariance = nan (-)
+  2. Channel 1: equivariance = nan (-)
+  3. Channel 2: equivariance = 0.9651 (+)
+  4. Channel 3: equivariance = nan (-)
+  5. Channel 4: equivariance = nan (-)
+  6. Channel 5: equivariance = nan (-)
+  7. Channel 8: equivariance = 0.7838 (+)
+  8. Channel 9: equivariance = 0.2732 (+)
+  9. Channel 7: equivariance = 0.0189 (-)
+  10. Channel 10: equivariance = nan (-)
+
+------------------------------------------------------------
+
+
+RECOMMENDED INTERVENTIONS:
+
+Layer conv1a overall has the strongest channels tracking the blue key:
+
+  Top spatial overlap channels:
+    Channel 6: IOU score = 0.0192
+    Channel 14: IOU score = 0.0135
+    Channel 19: IOU score = 0.0046
+
+  Top TopK ratio channels:
+    Channel 19: TopK ratio = 0.0056
+    Channel 14: TopK ratio = 0.0047
+    Channel 10: TopK ratio = 0.0044
+
+  Top SNR channels:
+    Channel 6: SNR = 183.0493
+    Channel 22: SNR = 2.1911
+    Channel 18: SNR = 1.7860
+
+  Top equivariance channels:
+    Channel 5: equivariance = 0.9829 (-)
+    Channel 15: equivariance = nan (-)
+    Channel 25: equivariance = 0.9827 (-)
+
+RECOMMENDED INTERVENTION CHANNELS:
+  1. Channel 19: Appears in 4 metrics, average score = 0.775
+     IOU: 0.005, TopK: 0.006, SNR: 1.557, Eq: 0.979
+  2. Channel 13: Appears in 4 metrics, average score = 0.350
+     IOU: 0.003, TopK: 0.004, SNR: 1.031, Eq: 0.977
+  3. Channel 14: Appears in 3 metrics, average score = 0.767
+     IOU: 0.013, TopK: 0.005, SNR: 1.344
+  4. Channel 5: Appears in 3 metrics, average score = 0.700
+     IOU: 0.004, SNR: 1.145, Eq: 0.983
+  5. Channel 23: Appears in 3 metrics, average score = 0.433
+     IOU: 0.003, TopK: 0.004, Eq: 0.982
+
+Example intervention command for the best overall channel:
+python run_sae_intervention.py --static --channel 19 --position 4,4 --value 8.0 --layer_name conv1a
+
+Example intervention with multiple top channels:
+python run_sae_intervention.py --static --channel 19,13,14 --position 4,4;4,4;4,4 --value 8.0 --layer_name conv1a
+

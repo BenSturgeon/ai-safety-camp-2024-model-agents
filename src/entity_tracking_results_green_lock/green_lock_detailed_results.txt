@@ -1,0 +1,224 @@
+================================================================================
+ENTITY TRACKING EXPERIMENT REPORT - GREEN LOCK
+================================================================================
+
+CONFIGURATION:
+Entity tracked: Green Lock (entity code 8)
+Mode: SAE activations
+
+METRICS USED:
+- Spatial overlap (IOU): How much activation overlaps with entity position
+- Equivariance: How well activation movement matches entity movement
+- X/Y-position correlation: Linear relationship with coordinates
+- TopK Activation Ratio: Ratio of activation in entity region vs. elsewhere
+- Signal-to-Noise Ratio (SNR): Mean activation in entity region vs. background noise
+
+RESULTS BY LAYER:
+
+[Layer conv3a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 13: IOU score = 0.0761
+  2. Channel 45: IOU score = 0.0596
+  3. Channel 109: IOU score = 0.0567
+  4. Channel 63: IOU score = 0.0553
+  5. Channel 67: IOU score = 0.0552
+  6. Channel 61: IOU score = 0.0546
+  7. Channel 113: IOU score = 0.0537
+  8. Channel 22: IOU score = 0.0535
+  9. Channel 93: IOU score = 0.0528
+  10. Channel 39: IOU score = 0.0515
+
+Top channels by TopK activation ratio:
+  1. Channel 89: TopK ratio = 0.0982
+  2. Channel 87: TopK ratio = 0.0909
+  3. Channel 109: TopK ratio = 0.0909
+  4. Channel 63: TopK ratio = 0.0873
+  5. Channel 61: TopK ratio = 0.0836
+  6. Channel 39: TopK ratio = 0.0800
+  7. Channel 13: TopK ratio = 0.0800
+  8. Channel 71: TopK ratio = 0.0800
+  9. Channel 93: TopK ratio = 0.0764
+  10. Channel 115: TopK ratio = 0.0727
+
+Top channels by Signal-to-Noise Ratio (SNR):
+  1. Channel 115: SNR = 3.6641
+  2. Channel 61: SNR = 3.1993
+  3. Channel 39: SNR = 3.0189
+  4. Channel 63: SNR = 2.8720
+  5. Channel 87: SNR = 2.7640
+  6. Channel 110: SNR = 2.6048
+  7. Channel 89: SNR = 2.3972
+  8. Channel 103: SNR = 2.0854
+  9. Channel 81: SNR = 1.8607
+  10. Channel 13: SNR = 1.8429
+
+Top equivariant channels (activations move with entity):
+  1. Channel 3: equivariance = nan (-)
+  2. Channel 11: equivariance = 0.3751 (-)
+  3. Channel 15: equivariance = nan (-)
+  4. Channel 20: equivariance = nan (-)
+  5. Channel 23: equivariance = nan (-)
+  6. Channel 24: equivariance = 0.4524 (+)
+  7. Channel 10: equivariance = 0.3492 (+)
+  8. Channel 40: equivariance = 0.3093 (+)
+  9. Channel 14: equivariance = 0.2432 (+)
+  10. Channel 8: equivariance = 0.2268 (+)
+
+Top X-position correlating channels:
+  1. Channel 3: correlation = nan (-), p-value = nan
+  2. Channel 15: correlation = nan (-), p-value = nan
+  3. Channel 19: correlation = 0.6945 (+), p-value = 0.0177
+  4. Channel 32: correlation = 0.6418 (+), p-value = 0.0333
+  5. Channel 9: correlation = 0.5837 (+), p-value = 0.0594
+  6. Channel 16: correlation = 0.5409 (+), p-value = 0.0857
+  7. Channel 20: correlation = nan (-), p-value = nan
+  8. Channel 21: correlation = -0.5455 (-), p-value = 0.0827
+  9. Channel 41: correlation = 0.5370 (+), p-value = 0.0885
+  10. Channel 39: correlation = 0.5299 (+), p-value = 0.0936
+
+Top Y-position correlating channels:
+  1. Channel 3: correlation = nan (-), p-value = nan
+  2. Channel 15: correlation = nan (-), p-value = nan
+  3. Channel 20: correlation = nan (-), p-value = nan
+  4. Channel 23: correlation = nan (-), p-value = nan
+  5. Channel 24: correlation = 0.4884 (+), p-value = 0.1275
+  6. Channel 13: correlation = 0.4356 (+), p-value = 0.1805
+  7. Channel 21: correlation = 0.4337 (+), p-value = 0.1827
+  8. Channel 1: correlation = -0.4247 (-), p-value = 0.1929
+  9. Channel 27: correlation = 0.4160 (+), p-value = 0.2032
+  10. Channel 25: correlation = 0.4128 (+), p-value = 0.2070
+
+------------------------------------------------------------
+
+[Layer conv4a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 4: IOU score = 0.2118
+  2. Channel 0: IOU score = 0.2045
+  3. Channel 6: IOU score = 0.2001
+  4. Channel 15: IOU score = 0.1911
+  5. Channel 10: IOU score = 0.1858
+  6. Channel 9: IOU score = 0.1827
+  7. Channel 18: IOU score = 0.1615
+  8. Channel 11: IOU score = 0.1490
+  9. Channel 16: IOU score = 0.1404
+  10. Channel 7: IOU score = 0.1391
+
+Top channels by TopK activation ratio:
+  1. Channel 6: TopK ratio = 0.3333
+  2. Channel 10: TopK ratio = 0.3333
+  3. Channel 11: TopK ratio = 0.3182
+  4. Channel 18: TopK ratio = 0.2121
+  5. Channel 9: TopK ratio = 0.1970
+  6. Channel 14: TopK ratio = 0.1970
+  7. Channel 15: TopK ratio = 0.1970
+  8. Channel 4: TopK ratio = 0.1818
+  9. Channel 16: TopK ratio = 0.1818
+  10. Channel 3: TopK ratio = 0.1667
+
+Top channels by Signal-to-Noise Ratio (SNR):
+  1. Channel 6: SNR = 1.0847
+  2. Channel 4: SNR = 1.0670
+  3. Channel 10: SNR = 1.0593
+  4. Channel 15: SNR = 1.0585
+  5. Channel 11: SNR = 1.0553
+  6. Channel 7: SNR = 1.0475
+  7. Channel 0: SNR = 1.0474
+  8. Channel 18: SNR = 1.0455
+  9. Channel 9: SNR = 1.0349
+  10. Channel 13: SNR = 1.0337
+
+Top equivariant channels (activations move with entity):
+  1. Channel 17: equivariance = 0.1979 (-)
+  2. Channel 7: equivariance = 0.1824 (+)
+  3. Channel 16: equivariance = 0.1710 (-)
+  4. Channel 11: equivariance = 0.1675 (-)
+  5. Channel 18: equivariance = 0.1656 (+)
+  6. Channel 8: equivariance = 0.1345 (+)
+  7. Channel 9: equivariance = 0.1213 (-)
+  8. Channel 4: equivariance = 0.1210 (-)
+  9. Channel 5: equivariance = 0.1066 (-)
+  10. Channel 13: equivariance = 0.0968 (+)
+
+Top X-position correlating channels:
+  1. Channel 2: correlation = 0.6549 (+), p-value = 0.0287
+  2. Channel 15: correlation = 0.5857 (+), p-value = 0.0583
+  3. Channel 12: correlation = 0.5672 (+), p-value = 0.0688
+  4. Channel 5: correlation = 0.4902 (+), p-value = 0.1258
+  5. Channel 19: correlation = 0.4701 (+), p-value = 0.1445
+  6. Channel 3: correlation = 0.4494 (+), p-value = 0.1655
+  7. Channel 14: correlation = 0.4444 (+), p-value = 0.1709
+  8. Channel 16: correlation = 0.4321 (+), p-value = 0.1844
+  9. Channel 13: correlation = 0.3615 (+), p-value = 0.2747
+  10. Channel 9: correlation = 0.3092 (+), p-value = 0.3549
+
+Top Y-position correlating channels:
+  1. Channel 1: correlation = -0.5195 (-), p-value = 0.1015
+  2. Channel 10: correlation = 0.4781 (+), p-value = 0.1369
+  3. Channel 18: correlation = 0.4209 (+), p-value = 0.1973
+  4. Channel 0: correlation = 0.4058 (+), p-value = 0.2156
+  5. Channel 13: correlation = 0.3777 (+), p-value = 0.2521
+  6. Channel 11: correlation = 0.3649 (+), p-value = 0.2699
+  7. Channel 4: correlation = 0.3352 (+), p-value = 0.3136
+  8. Channel 17: correlation = 0.3031 (+), p-value = 0.3650
+  9. Channel 16: correlation = 0.2958 (+), p-value = 0.3772
+  10. Channel 6: correlation = 0.2926 (+), p-value = 0.3826
+
+------------------------------------------------------------
+
+
+RECOMMENDED INTERVENTIONS:
+
+Layer conv4a overall has the strongest channels tracking the green lock:
+
+  Top spatial overlap channels:
+    Channel 4: IOU score = 0.2118
+    Channel 0: IOU score = 0.2045
+    Channel 6: IOU score = 0.2001
+
+  Top TopK ratio channels:
+    Channel 6: TopK ratio = 0.3333
+    Channel 10: TopK ratio = 0.3333
+    Channel 11: TopK ratio = 0.3182
+
+  Top SNR channels:
+    Channel 6: SNR = 1.0847
+    Channel 4: SNR = 1.0670
+    Channel 10: SNR = 1.0593
+
+  Top equivariance channels:
+    Channel 17: equivariance = 0.1979 (-)
+    Channel 7: equivariance = 0.1824 (+)
+    Channel 16: equivariance = 0.1710 (-)
+
+  Top X-position correlating channels:
+    Channel 2: correlation = 0.6549 (+), p-value = 0.0287
+    Channel 15: correlation = 0.5857 (+), p-value = 0.0583
+    Channel 12: correlation = 0.5672 (+), p-value = 0.0688
+
+  Top Y-position correlating channels:
+    Channel 1: correlation = -0.5195 (-), p-value = 0.1015
+    Channel 10: correlation = 0.4781 (+), p-value = 0.1369
+    Channel 18: correlation = 0.4209 (+), p-value = 0.1973
+
+RECOMMENDED INTERVENTION CHANNELS:
+  1. Channel 4: Appears in 4 metrics, average score = 0.625
+     IOU: 0.212, TopK: 0.182, SNR: 1.067, Eq: 0.121
+  2. Channel 11: Appears in 4 metrics, average score = 0.600
+     IOU: 0.149, TopK: 0.318, SNR: 1.055, Eq: 0.167
+  3. Channel 18: Appears in 4 metrics, average score = 0.500
+     IOU: 0.162, TopK: 0.212, SNR: 1.045, Eq: 0.166
+  4. Channel 9: Appears in 4 metrics, average score = 0.425
+     IOU: 0.183, TopK: 0.197, SNR: 1.035, Eq: 0.121
+  5. Channel 6: Appears in 3 metrics, average score = 0.933
+     IOU: 0.200, TopK: 0.333, SNR: 1.085
+
+Example intervention command for the best overall channel:
+python run_sae_intervention.py --static --channel 4 --position 4,4 --value 8.0 --layer_name conv4a
+
+Example intervention with multiple top channels:
+python run_sae_intervention.py --static --channel 4,11,18 --position 4,4;4,4;4,4 --value 8.0 --layer_name conv4a
+

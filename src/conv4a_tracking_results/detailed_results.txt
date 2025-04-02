@@ -1,0 +1,139 @@
+================================================================================
+ENTITY TRACKING EXPERIMENT REPORT
+================================================================================
+
+CONFIGURATION:
+Entity tracked: Blue key (entity code 4)
+Mode: SAE activations
+
+METRICS USED:
+- Spatial overlap (IOU): How much activation overlaps with entity position
+- Equivariance: How well activation movement matches entity movement
+- X/Y-position correlation: Linear relationship with coordinates
+- IOU: Spatial overlap between activation and entity position
+- Equivariance: How well activation movement matches entity movement
+
+RESULTS BY LAYER:
+
+[Layer conv3a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 110: IOU score = 0.2600
+  2. Channel 67: IOU score = 0.2543
+  3. Channel 21: IOU score = 0.2151
+  4. Channel 89: IOU score = 0.2063
+  5. Channel 70: IOU score = 0.2028
+  6. Channel 115: IOU score = 0.1880
+  7. Channel 13: IOU score = 0.1762
+  8. Channel 84: IOU score = 0.1698
+  9. Channel 71: IOU score = 0.1633
+  10. Channel 108: IOU score = 0.1622
+
+Top equivariant channels (activations move with entity):
+  1. Channel 1: equivariance = 0.9705 (+)
+  2. Channel 3: equivariance = nan (-)
+  3. Channel 5: equivariance = 0.9218 (+)
+  4. Channel 15: equivariance = nan (-)
+  5. Channel 20: equivariance = nan (-)
+  6. Channel 23: equivariance = nan (-)
+  7. Channel 40: equivariance = 0.9678 (+)
+  8. Channel 32: equivariance = 0.9341 (+)
+  9. Channel 26: equivariance = 0.9306 (+)
+  10. Channel 27: equivariance = 0.9191 (+)
+
+Top X-position correlating channels:
+  1. Channel 3: correlation = nan (-), p-value = nan
+  2. Channel 5: correlation = 0.3797 (+), p-value = 0.2494
+  3. Channel 11: correlation = -0.3215 (-), p-value = 0.3349
+  4. Channel 15: correlation = nan (-), p-value = nan
+  5. Channel 20: correlation = nan (-), p-value = nan
+  6. Channel 23: correlation = nan (-), p-value = nan
+  7. Channel 26: correlation = 0.6195 (+), p-value = 0.0421
+  8. Channel 2: correlation = -0.4519 (-), p-value = 0.1629
+  9. Channel 1: correlation = 0.4088 (+), p-value = 0.2119
+  10. Channel 21: correlation = -0.3043 (-), p-value = 0.3629
+
+Top Y-position correlating channels:
+  1. Channel 3: correlation = nan (-), p-value = nan
+  2. Channel 9: correlation = -0.7696 (-), p-value = 0.0056
+  3. Channel 6: correlation = -0.5985 (-), p-value = 0.0517
+  4. Channel 15: correlation = nan (-), p-value = nan
+  5. Channel 64: correlation = -0.5709 (-), p-value = 0.0666
+  6. Channel 19: correlation = -0.5234 (-), p-value = 0.0985
+  7. Channel 13: correlation = -0.5111 (-), p-value = 0.1081
+  8. Channel 18: correlation = -0.4816 (-), p-value = 0.1336
+  9. Channel 16: correlation = -0.4786 (-), p-value = 0.1365
+  10. Channel 5: correlation = 0.4605 (+), p-value = 0.1540
+
+------------------------------------------------------------
+
+[Layer conv4a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 4: IOU score = 0.6901
+  2. Channel 19: IOU score = 0.4878
+  3. Channel 9: IOU score = 0.4585
+  4. Channel 6: IOU score = 0.4280
+  5. Channel 16: IOU score = 0.4124
+  6. Channel 5: IOU score = 0.3659
+  7. Channel 0: IOU score = 0.3461
+  8. Channel 14: IOU score = 0.3380
+  9. Channel 13: IOU score = 0.3087
+  10. Channel 17: IOU score = 0.2999
+
+Top equivariant channels (activations move with entity):
+  1. Channel 4: equivariance = 0.9394 (+)
+  2. Channel 9: equivariance = 0.9126 (+)
+  3. Channel 6: equivariance = 0.9039 (+)
+  4. Channel 19: equivariance = 0.9027 (+)
+  5. Channel 0: equivariance = 0.8802 (+)
+  6. Channel 10: equivariance = 0.8750 (+)
+  7. Channel 2: equivariance = 0.8749 (+)
+  8. Channel 11: equivariance = 0.8685 (+)
+  9. Channel 5: equivariance = 0.8664 (+)
+  10. Channel 18: equivariance = 0.8628 (+)
+
+Top X-position correlating channels:
+  1. Channel 12: correlation = 0.5848 (+), p-value = 0.0588
+  2. Channel 17: correlation = -0.4830 (-), p-value = 0.1323
+  3. Channel 2: correlation = 0.4308 (+), p-value = 0.1859
+  4. Channel 14: correlation = 0.3175 (+), p-value = 0.3414
+  5. Channel 13: correlation = 0.3122 (+), p-value = 0.3499
+  6. Channel 11: correlation = 0.2989 (+), p-value = 0.3719
+  7. Channel 4: correlation = 0.2939 (+), p-value = 0.3803
+  8. Channel 3: correlation = 0.2743 (+), p-value = 0.4144
+  9. Channel 7: correlation = -0.2717 (-), p-value = 0.4190
+  10. Channel 16: correlation = 0.2551 (+), p-value = 0.4491
+
+Top Y-position correlating channels:
+  1. Channel 7: correlation = 0.6688 (+), p-value = 0.0245
+  2. Channel 17: correlation = 0.5163 (+), p-value = 0.1040
+  3. Channel 6: correlation = 0.4648 (+), p-value = 0.1498
+  4. Channel 5: correlation = 0.3808 (+), p-value = 0.2479
+  5. Channel 19: correlation = 0.3773 (+), p-value = 0.2526
+  6. Channel 3: correlation = 0.3733 (+), p-value = 0.2581
+  7. Channel 9: correlation = 0.3578 (+), p-value = 0.2800
+  8. Channel 13: correlation = 0.3127 (+), p-value = 0.3491
+  9. Channel 16: correlation = 0.2976 (+), p-value = 0.3741
+  10. Channel 10: correlation = 0.2237 (+), p-value = 0.5084
+
+------------------------------------------------------------
+
+
+RECOMMENDED INTERVENTIONS:
+
+Layer conv4a:
+  Top spatial overlap channels:
+    Channel 4: IOU score = 0.6901
+    Channel 19: IOU score = 0.4878
+    Channel 9: IOU score = 0.4585
+  Top equivariance channels:
+    Channel 4: equivariance = 0.9394 (+)
+    Channel 9: equivariance = 0.9126 (+)
+    Channel 6: equivariance = 0.9039 (+)
+
+  Example intervention command:
+    python run_sae_intervention.py --static --channel 4 --position 4,4 --value 8.0 --layer_name conv4a
+

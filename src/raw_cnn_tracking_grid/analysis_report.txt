@@ -1,0 +1,417 @@
+================================================================================
+ENTITY TRACKING EXPERIMENT REPORT
+================================================================================
+
+CONFIGURATION:
+Model: ../model_interpretable.pt
+Entity tracked: Blue key (entity code 4)
+Mode: Raw CNN activations
+
+METRICS USED:
+- Spatial overlap: How much activation overlaps with entity position
+- Activation centroid: How far the center of activation is from entity
+- Peak distance: How far the peak activation is from entity
+- Equivariance: How well activation movement matches entity movement
+- X/Y-position correlation: Linear relationship with coordinates
+
+RESULTS BY LAYER:
+
+[Layer conv1a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 0: overlap score = 0.0568
+  2. Channel 13: overlap score = 0.0559
+  3. Channel 6: overlap score = 0.0454
+  4. Channel 7: overlap score = 0.0378
+  5. Channel 12: overlap score = 0.0320
+  6. Channel 4: overlap score = 0.0274
+  7. Channel 10: overlap score = 0.0224
+  8. Channel 1: overlap score = 0.0219
+  9. Channel 5: overlap score = 0.0165
+  10. Channel 11: overlap score = 0.0047
+
+Top equivariant channels (activations move with entity):
+  1. Channel 8: equivariance = 0.9883
+  2. Channel 1: equivariance = 0.9864
+  3. Channel 7: equivariance = 0.9789
+  4. Channel 12: equivariance = 0.9758
+  5. Channel 3: equivariance = 0.9602
+  6. Channel 9: equivariance = 0.9480
+  7. Channel 4: equivariance = 0.4882
+  8. Channel 11: equivariance = 0.0880
+  9. Channel 10: equivariance = -0.3688
+  10. Channel 5: equivariance = -0.5965
+
+Channels with closest activation centroid to entity:
+  1. Channel 3: centroid distance = 17.5302
+  2. Channel 13: centroid distance = 17.6827
+  3. Channel 4: centroid distance = 17.6908
+  4. Channel 6: centroid distance = 17.7038
+  5. Channel 0: centroid distance = 17.7165
+  6. Channel 12: centroid distance = 17.7174
+  7. Channel 1: centroid distance = 17.7251
+  8. Channel 15: centroid distance = 17.7273
+  9. Channel 9: centroid distance = 17.7301
+  10. Channel 8: centroid distance = 17.7334
+
+Top X-position correlating channels:
+  1. Channel 6: correlation = -0.8410 (-), p-value = 0.0012
+  2. Channel 10: correlation = -0.8401 (-), p-value = 0.0012
+  3. Channel 5: correlation = -0.8083 (-), p-value = 0.0026
+  4. Channel 8: correlation = 0.8057 (+), p-value = 0.0028
+  5. Channel 0: correlation = -0.7754 (-), p-value = 0.0050
+  6. Channel 15: correlation = -0.7734 (-), p-value = 0.0052
+  7. Channel 14: correlation = -0.7514 (-), p-value = 0.0077
+  8. Channel 2: correlation = -0.7148 (-), p-value = 0.0134
+  9. Channel 9: correlation = 0.6565 (+), p-value = 0.0282
+  10. Channel 1: correlation = 0.6252 (+), p-value = 0.0397
+
+Top Y-position correlating channels:
+  1. Channel 4: correlation = 0.7651 (+), p-value = 0.0061
+  2. Channel 3: correlation = 0.7249 (+), p-value = 0.0116
+  3. Channel 13: correlation = 0.7036 (+), p-value = 0.0157
+  4. Channel 9: correlation = -0.6323 (-), p-value = 0.0368
+  5. Channel 7: correlation = 0.6136 (+), p-value = 0.0447
+  6. Channel 11: correlation = 0.5583 (+), p-value = 0.0743
+  7. Channel 12: correlation = 0.4799 (+), p-value = 0.1352
+  8. Channel 1: correlation = 0.4541 (+), p-value = 0.1606
+  9. Channel 0: correlation = 0.4129 (+), p-value = 0.2070
+  10. Channel 5: correlation = 0.3843 (+), p-value = 0.2433
+
+------------------------------------------------------------
+
+[Layer conv2a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 12: overlap score = 0.0177
+  2. Channel 28: overlap score = 0.0145
+  3. Channel 21: overlap score = -0.0077
+  4. Channel 4: overlap score = -0.0142
+  5. Channel 6: overlap score = -0.0149
+  6. Channel 31: overlap score = -0.0153
+  7. Channel 25: overlap score = -0.0161
+  8. Channel 26: overlap score = -0.0168
+  9. Channel 7: overlap score = -0.0185
+  10. Channel 27: overlap score = -0.0192
+
+Top equivariant channels (activations move with entity):
+  1. Channel 21: equivariance = 0.6399
+  2. Channel 26: equivariance = 0.5497
+  3. Channel 20: equivariance = 0.3823
+  4. Channel 18: equivariance = 0.2899
+  5. Channel 12: equivariance = -0.0989
+  6. Channel 7: equivariance = -0.3603
+  7. Channel 19: equivariance = -0.4824
+  8. Channel 15: equivariance = -0.4989
+  9. Channel 23: equivariance = -0.5999
+  10. Channel 16: equivariance = -0.6190
+
+Channels with closest activation centroid to entity:
+  1. Channel 12: centroid distance = 8.8232
+  2. Channel 22: centroid distance = 8.8264
+  3. Channel 31: centroid distance = 8.8313
+  4. Channel 20: centroid distance = 8.8348
+  5. Channel 18: centroid distance = 8.8351
+  6. Channel 23: centroid distance = 8.8401
+  7. Channel 24: centroid distance = 8.8419
+  8. Channel 16: centroid distance = 8.8425
+  9. Channel 21: centroid distance = 8.8437
+  10. Channel 26: centroid distance = 8.8441
+
+Top X-position correlating channels:
+  1. Channel 17: correlation = 0.6434 (+), p-value = 0.0327
+  2. Channel 13: correlation = 0.6343 (+), p-value = 0.0361
+  3. Channel 1: correlation = 0.5470 (+), p-value = 0.0816
+  4. Channel 31: correlation = 0.4928 (+), p-value = 0.1235
+  5. Channel 7: correlation = 0.3995 (+), p-value = 0.2235
+  6. Channel 11: correlation = 0.3872 (+), p-value = 0.2395
+  7. Channel 25: correlation = 0.3810 (+), p-value = 0.2477
+  8. Channel 14: correlation = 0.3792 (+), p-value = 0.2500
+  9. Channel 2: correlation = 0.3740 (+), p-value = 0.2572
+  10. Channel 8: correlation = 0.3633 (+), p-value = 0.2721
+
+Top Y-position correlating channels:
+  1. Channel 1: correlation = -0.6169 (-), p-value = 0.0432
+  2. Channel 17: correlation = -0.2726 (-), p-value = 0.4173
+  3. Channel 3: correlation = -0.2723 (-), p-value = 0.4178
+  4. Channel 13: correlation = -0.2568 (-), p-value = 0.4458
+  5. Channel 4: correlation = -0.1406 (-), p-value = 0.6800
+  6. Channel 31: correlation = -0.1047 (-), p-value = 0.7594
+  7. Channel 5: correlation = -0.0878 (-), p-value = 0.7974
+  8. Channel 11: correlation = -0.0470 (-), p-value = 0.8908
+  9. Channel 28: correlation = 0.0438 (+), p-value = 0.8983
+  10. Channel 22: correlation = 0.0404 (+), p-value = 0.9061
+
+------------------------------------------------------------
+
+[Layer conv2b]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 0: overlap score = 0.1228
+  2. Channel 6: overlap score = 0.1034
+  3. Channel 7: overlap score = 0.0869
+  4. Channel 2: overlap score = 0.0756
+  5. Channel 20: overlap score = 0.0751
+  6. Channel 23: overlap score = 0.0747
+  7. Channel 9: overlap score = 0.0740
+  8. Channel 10: overlap score = 0.0532
+  9. Channel 30: overlap score = 0.0502
+  10. Channel 4: overlap score = 0.0497
+
+Top equivariant channels (activations move with entity):
+  1. Channel 11: equivariance = 0.7393
+  2. Channel 14: equivariance = 0.7180
+  3. Channel 20: equivariance = 0.5404
+  4. Channel 9: equivariance = 0.5245
+  5. Channel 6: equivariance = 0.3229
+  6. Channel 23: equivariance = 0.1601
+  7. Channel 22: equivariance = 0.1454
+  8. Channel 25: equivariance = 0.1224
+  9. Channel 8: equivariance = -0.0343
+  10. Channel 7: equivariance = -0.0842
+
+Channels with closest activation centroid to entity:
+  1. Channel 11: centroid distance = 8.7948
+  2. Channel 20: centroid distance = 8.7989
+  3. Channel 22: centroid distance = 8.8243
+  4. Channel 3: centroid distance = 8.8403
+  5. Channel 8: centroid distance = 8.8455
+  6. Channel 19: centroid distance = 8.8460
+  7. Channel 7: centroid distance = 8.8474
+  8. Channel 9: centroid distance = 8.8500
+  9. Channel 14: centroid distance = 8.8524
+  10. Channel 27: centroid distance = 8.8560
+
+Top X-position correlating channels:
+  1. Channel 1: correlation = 0.3917 (+), p-value = 0.2335
+  2. Channel 16: correlation = 0.3829 (+), p-value = 0.2451
+  3. Channel 17: correlation = 0.3766 (+), p-value = 0.2537
+  4. Channel 12: correlation = 0.3733 (+), p-value = 0.2582
+  5. Channel 19: correlation = 0.3727 (+), p-value = 0.2590
+  6. Channel 31: correlation = 0.3687 (+), p-value = 0.2645
+  7. Channel 24: correlation = 0.3650 (+), p-value = 0.2697
+  8. Channel 21: correlation = 0.3647 (+), p-value = 0.2702
+  9. Channel 7: correlation = 0.3641 (+), p-value = 0.2710
+  10. Channel 29: correlation = 0.3609 (+), p-value = 0.2755
+
+Top Y-position correlating channels:
+  1. Channel 28: correlation = -0.2678 (-), p-value = 0.4259
+  2. Channel 11: correlation = 0.1180 (+), p-value = 0.7296
+  3. Channel 14: correlation = 0.0859 (+), p-value = 0.8016
+  4. Channel 20: correlation = 0.0793 (+), p-value = 0.8167
+  5. Channel 16: correlation = -0.0783 (-), p-value = 0.8189
+  6. Channel 1: correlation = -0.0754 (-), p-value = 0.8256
+  7. Channel 29: correlation = -0.0736 (-), p-value = 0.8298
+  8. Channel 12: correlation = -0.0678 (-), p-value = 0.8430
+  9. Channel 7: correlation = 0.0641 (+), p-value = 0.8514
+  10. Channel 26: correlation = -0.0595 (-), p-value = 0.8620
+
+------------------------------------------------------------
+
+[Layer conv3a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 7: overlap score = 0.2189
+  2. Channel 25: overlap score = 0.1645
+  3. Channel 21: overlap score = 0.1182
+  4. Channel 30: overlap score = 0.1168
+  5. Channel 13: overlap score = 0.0773
+  6. Channel 22: overlap score = 0.0747
+  7. Channel 31: overlap score = 0.0738
+  8. Channel 16: overlap score = 0.0547
+  9. Channel 29: overlap score = 0.0375
+  10. Channel 20: overlap score = 0.0224
+
+Top equivariant channels (activations move with entity):
+  1. Channel 21: equivariance = 0.9063
+  2. Channel 13: equivariance = 0.6909
+  3. Channel 7: equivariance = 0.6012
+  4. Channel 30: equivariance = 0.2438
+  5. Channel 14: equivariance = 0.1716
+  6. Channel 27: equivariance = 0.1657
+  7. Channel 16: equivariance = 0.0230
+  8. Channel 22: equivariance = -0.0077
+  9. Channel 20: equivariance = -0.0289
+  10. Channel 11: equivariance = -0.0622
+
+Channels with closest activation centroid to entity:
+  1. Channel 7: centroid distance = 4.2988
+  2. Channel 21: centroid distance = 4.3427
+  3. Channel 13: centroid distance = 4.3634
+  4. Channel 20: centroid distance = 4.3886
+  5. Channel 22: centroid distance = 4.3888
+  6. Channel 30: centroid distance = 4.3906
+  7. Channel 11: centroid distance = 4.3916
+  8. Channel 14: centroid distance = 4.3986
+  9. Channel 16: centroid distance = 4.4062
+  10. Channel 27: centroid distance = 4.4143
+
+Top X-position correlating channels:
+  1. Channel 24: correlation = 0.7442 (+), p-value = 0.0086
+  2. Channel 4: correlation = 0.6832 (+), p-value = 0.0205
+  3. Channel 23: correlation = 0.6616 (+), p-value = 0.0266
+  4. Channel 3: correlation = 0.6344 (+), p-value = 0.0360
+  5. Channel 6: correlation = 0.6222 (+), p-value = 0.0409
+  6. Channel 15: correlation = 0.6066 (+), p-value = 0.0478
+  7. Channel 10: correlation = 0.6005 (+), p-value = 0.0508
+  8. Channel 17: correlation = 0.5995 (+), p-value = 0.0513
+  9. Channel 1: correlation = 0.5981 (+), p-value = 0.0520
+  10. Channel 0: correlation = 0.5721 (+), p-value = 0.0659
+
+Top Y-position correlating channels:
+  1. Channel 13: correlation = 0.6620 (+), p-value = 0.0265
+  2. Channel 5: correlation = -0.5786 (-), p-value = 0.0622
+  3. Channel 2: correlation = -0.5743 (-), p-value = 0.0646
+  4. Channel 21: correlation = 0.4933 (+), p-value = 0.1231
+  5. Channel 20: correlation = 0.4589 (+), p-value = 0.1557
+  6. Channel 7: correlation = 0.4415 (+), p-value = 0.1740
+  7. Channel 10: correlation = -0.3993 (-), p-value = 0.2238
+  8. Channel 19: correlation = -0.3926 (-), p-value = 0.2324
+  9. Channel 4: correlation = -0.2919 (-), p-value = 0.3837
+  10. Channel 16: correlation = 0.2911 (+), p-value = 0.3852
+
+------------------------------------------------------------
+
+[Layer conv4a]
+============================================================
+
+Top spatial overlap channels (activations match entity position):
+  1. Channel 29: overlap score = 0.5272
+  2. Channel 15: overlap score = 0.2690
+  3. Channel 26: overlap score = 0.0798
+  4. Channel 16: overlap score = -0.0342
+  5. Channel 22: overlap score = -0.0682
+  6. Channel 5: overlap score = -0.0883
+  7. Channel 14: overlap score = -0.1216
+  8. Channel 18: overlap score = -0.1525
+  9. Channel 28: overlap score = -0.2008
+  10. Channel 0: overlap score = -0.2085
+
+Top equivariant channels (activations move with entity):
+  1. Channel 29: equivariance = 0.0516
+  2. Channel 15: equivariance = 0.0317
+  3. Channel 16: equivariance = -0.3291
+  4. Channel 22: equivariance = -0.3778
+  5. Channel 14: equivariance = -0.4112
+  6. Channel 8: equivariance = -0.4424
+  7. Channel 26: equivariance = -0.4735
+  8. Channel 5: equivariance = -0.5032
+  9. Channel 11: equivariance = -0.6806
+  10. Channel 31: equivariance = -0.6941
+
+Channels with closest activation centroid to entity:
+  1. Channel 15: centroid distance = 2.2102
+  2. Channel 29: centroid distance = 2.2663
+  3. Channel 14: centroid distance = 2.2905
+  4. Channel 22: centroid distance = 2.2931
+  5. Channel 31: centroid distance = 2.2953
+  6. Channel 2: centroid distance = 2.3139
+  7. Channel 26: centroid distance = 2.3152
+  8. Channel 5: centroid distance = 2.3442
+  9. Channel 7: centroid distance = 2.3703
+  10. Channel 20: centroid distance = 2.3845
+
+Top X-position correlating channels:
+  1. Channel 16: correlation = 0.8181 (+), p-value = 0.0021
+  2. Channel 17: correlation = 0.7567 (+), p-value = 0.0070
+  3. Channel 10: correlation = 0.7501 (+), p-value = 0.0078
+  4. Channel 24: correlation = 0.6640 (+), p-value = 0.0259
+  5. Channel 19: correlation = 0.6472 (+), p-value = 0.0314
+  6. Channel 4: correlation = 0.6457 (+), p-value = 0.0319
+  7. Channel 14: correlation = 0.6450 (+), p-value = 0.0321
+  8. Channel 8: correlation = 0.6177 (+), p-value = 0.0429
+  9. Channel 31: correlation = 0.6174 (+), p-value = 0.0430
+  10. Channel 12: correlation = 0.5764 (+), p-value = 0.0634
+
+Top Y-position correlating channels:
+  1. Channel 11: correlation = -0.7072 (-), p-value = 0.0149
+  2. Channel 26: correlation = -0.6501 (-), p-value = 0.0303
+  3. Channel 1: correlation = -0.6442 (-), p-value = 0.0324
+  4. Channel 23: correlation = -0.6434 (-), p-value = 0.0327
+  5. Channel 3: correlation = -0.6289 (-), p-value = 0.0382
+  6. Channel 9: correlation = -0.6163 (-), p-value = 0.0434
+  7. Channel 14: correlation = -0.6099 (-), p-value = 0.0463
+  8. Channel 19: correlation = -0.5891 (-), p-value = 0.0565
+  9. Channel 29: correlation = -0.5523 (-), p-value = 0.0781
+  10. Channel 13: correlation = -0.5512 (-), p-value = 0.0788
+
+------------------------------------------------------------
+
+RECOMMENDED INTERVENTIONS:
+
+Layer conv1a:
+  Top spatial overlap channels:
+    Channel 0: overlap score = 0.0568
+    Channel 13: overlap score = 0.0559
+    Channel 6: overlap score = 0.0454
+  Top equivariance channels:
+    Channel 8: equivariance = 0.9883
+    Channel 1: equivariance = 0.9864
+    Channel 7: equivariance = 0.9789
+
+  Example intervention command:
+    python run_sae_intervention.py --raw_cnn --layer_name conv1a --static --channel 0 --position 4,4 --value 8.0
+
+Layer conv2a:
+  Top spatial overlap channels:
+    Channel 12: overlap score = 0.0177
+    Channel 28: overlap score = 0.0145
+    Channel 21: overlap score = -0.0077
+  Top equivariance channels:
+    Channel 21: equivariance = 0.6399
+    Channel 26: equivariance = 0.5497
+    Channel 20: equivariance = 0.3823
+
+  Example intervention command:
+    python run_sae_intervention.py --raw_cnn --layer_name conv2a --static --channel 12 --position 4,4 --value 8.0
+
+Layer conv2b:
+  Top spatial overlap channels:
+    Channel 0: overlap score = 0.1228
+    Channel 6: overlap score = 0.1034
+    Channel 7: overlap score = 0.0869
+  Top equivariance channels:
+    Channel 11: equivariance = 0.7393
+    Channel 14: equivariance = 0.7180
+    Channel 20: equivariance = 0.5404
+
+  Example intervention command:
+    python run_sae_intervention.py --raw_cnn --layer_name conv2b --static --channel 0 --position 4,4 --value 8.0
+
+Layer conv3a:
+  Top spatial overlap channels:
+    Channel 7: overlap score = 0.2189
+    Channel 25: overlap score = 0.1645
+    Channel 21: overlap score = 0.1182
+  Top equivariance channels:
+    Channel 21: equivariance = 0.9063
+    Channel 13: equivariance = 0.6909
+    Channel 7: equivariance = 0.6012
+
+  Example intervention command:
+    python run_sae_intervention.py --raw_cnn --layer_name conv3a --static --channel 7 --position 4,4 --value 8.0
+
+Layer conv4a:
+  Top spatial overlap channels:
+    Channel 29: overlap score = 0.5272
+    Channel 15: overlap score = 0.2690
+    Channel 26: overlap score = 0.0798
+  Top equivariance channels:
+    Channel 29: equivariance = 0.0516
+    Channel 15: equivariance = 0.0317
+    Channel 16: equivariance = -0.3291
+
+  Example intervention command:
+    python run_sae_intervention.py --raw_cnn --layer_name conv4a --static --channel 29 --position 4,4 --value 8.0
+
+================================================================================
+VISUALIZATION GUIDE:
+1. Check '{layer}_all_channels_frame{idx}.png' files to see all channels at once
+2. The red dot on each activation map shows the entity position
+3. For intervention experiments, prioritize channels with high spatial overlap
+   and equivariance scores, as these are most likely to represent the entity
+================================================================================
