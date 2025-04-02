@@ -166,7 +166,6 @@ class SAEInterventionExperiment:
         self.intervention_config = config
         self.intervention_active = True
         self.dynamic_intervention = None
-        print(f"Static intervention configured for {len(config)} points")
     
     def set_dynamic_intervention(self, intervention_function):
         """
@@ -179,14 +178,12 @@ class SAEInterventionExperiment:
         self.dynamic_intervention = intervention_function
         self.intervention_active = False
         self.intervention_config = None
-        print("Dynamic intervention configured")
         
     def disable_intervention(self):
         """Disable any active interventions"""
         self.intervention_active = False
         self.intervention_config = None
         self.dynamic_intervention = None
-        print("Interventions disabled")
     
     def run_maze_experiment(self, maze_variant=0, max_steps=100, save_gif=True, 
                            output_path="maze_intervention_results", save_gif_freq=1,
