@@ -962,7 +962,7 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
     
     # Process each maze pattern in the sequence
     for pattern_idx, pattern in enumerate(maze_patterns):
-        print(f"Processing maze pattern {pattern_idx+1}/{len(maze_patterns)}")
+        # print(f"Processing maze pattern {pattern_idx+1}/{len(maze_patterns)}") # Commented out for tqdm
         
         # Make sure pattern is a numpy array with correct dimensions
         if not isinstance(pattern, np.ndarray):

@@ -25,7 +25,7 @@ import os
 
 
 
-from src.policies_impala import ImpalaCNN
+from policies_impala import ImpalaCNN
 from procgen_tools.procgen_wrappers import VecExtractDictObs, TransposeFrame, ScaledFloatFrame
 
 from gym3 import ToBaselinesVecEnv

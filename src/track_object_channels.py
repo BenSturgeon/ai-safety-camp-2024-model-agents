@@ -42,7 +42,7 @@ class EntityTrackingExperiment:
         self.handles = []
         self.all_activations = {}
         
-    def load_sae(self, layer_number, step=1000000):
+    def load_sae(self, layer_number, step=150000000):
         """Load an SAE for a specific layer"""
         layer_name = self.target_layers[layer_number]
         checkpoint_path = f"checkpoints/layer_{layer_number}_{layer_name}/sae_checkpoint_step_{step}.pt"
@@ -887,8 +887,8 @@ def parse_args():
                         help="Secondary entity code (optional)")
     parser.add_argument("--output", type=str, default="entity_tracking_results",
                         help="Directory to save results")
-    parser.add_argument("--sae_step", type=int, default=1000000,
-                        help="Step number for SAE checkpoints (default: 1000000)")
+    parser.add_argument("--sae_step", type=int, default=15000000,
+                        help="Step number for SAE checkpoints (default: 15000000)")
     
     return parser.parse_args()
 
