@@ -146,23 +146,24 @@ ordered_layer_names = {
 #     save_dir="global_stats",
 # )
 # %%
-layer_number = 8
-layer_name = ordered_layer_names[layer_number]
-
-sae_cnn.train_layer(
-    model,
-    layer_name,
-    layer_number,
-    steps=4500000,
-    batch_size=64,
-    lr=1e-5,
-    num_envs=8,
-    episode_length=150,
-    log_freq=1000,
-    checkpoint_dir="checkpoints",
-    stats_dir="global_stats",
-    wandb_project="SAE_training",
-)
+for layer_number, layer_name in ordered_layer_names.items():
+    print(f"--- Training SAE for layer {layer_number}: {layer_name} ---")
+    sae_cnn.train_layer(
+        model,
+        layer_name,
+        layer_number,
+        steps=15000000,  
+        batch_size=64,
+        lr=1e-5,       
+        num_envs=8,
+        episode_length=150,
+        log_freq=1000,
+        checkpoint_dir="checkpoints",
+        stats_dir="global_stats",
+        wandb_project="SAE_training",
+        # Potentially add layer-specific wandb run names or tags here
+    )
+    print(f"--- Finished training SAE for layer {layer_number}: {layer_name} ---")
 
 # %%
 # model = helpers.load_interpretable_model()
