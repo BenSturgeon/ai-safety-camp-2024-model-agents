@@ -138,6 +138,7 @@ class BaseModelZeroAblationExperiment:
 class SAEZeroAblationExperiment:
     """
     Handles zero-ablation interventions on SAE features corresponding to a base model layer.
+    Captures post-ablation activation sequences for visualization.
     """
     def __init__(self, model_path, sae_checkpoint_path, layer_name, layer_number, device=None):
         """
@@ -192,8 +193,13 @@ class SAEZeroAblationExperiment:
             raise ValueError(f"Base model layer '{self.layer_name}' not found.")
         print(f"SAEZeroAblation: Targeting base layer: {self.layer_name} for SAE intervention")
 
-        self.features_to_zero = None # List of feature indices to zero
+        self.features_to_zero = None
         self.hook_handle = None
+
+        # --- Modify attributes for capturing activation sequences ---
+        self._is_capturing_activation_sequence = False
+        self._captured_sae_activation_sequence = [] # List to store tensors
+        # ---
 
     def _get_module(self, layer_name):
         """Gets the module object from the model using its layer name."""
@@ -205,18 +211,16 @@ class SAEZeroAblationExperiment:
     def _sae_zeroing_hook(self, module, input, output):
         """
         Hook function placed on the base model layer.
-        Aligned with sae_spatial_intervention.py patterns.
+        Applies zeroing and captures the *modified* SAE activations if sequence capture is active.
         """
+        original_base_output = output
+
         if self.features_to_zero is not None and len(self.features_to_zero) > 0:
             with torch.no_grad():
-                # --- Align with sae_spatial_intervention.py: Unpack tuple from SAE forward pass ---
-                # Assumes the forward pass returns (_, _, activations_tensor, _)
+                # --- Encode ---
                 try:
-                    # Attempt unpacking assuming 4 elements, activations are 3rd
                     _, _, sae_features, _ = self.sae(output)
                     if not isinstance(sae_features, torch.Tensor):
-                         # Handle cases where tuple structure might differ or forward doesn't return tensor
-                         print(f"ERROR: SAE forward call did not return a tensor in the 3rd position. Got type: {type(sae_features)}")
                          raise TypeError("Unexpected output format from SAE forward call.")
                 except (ValueError, TypeError) as e:
                     print(f"ERROR: Failed to unpack expected tuple (e.g., _, _, acts, _) from self.sae(output). Error: {e}")
@@ -235,33 +239,40 @@ class SAEZeroAblationExperiment:
                          # Raise the original error or a new one
                          raise AttributeError(f"Cannot extract SAE features tensor from self.sae output. Original error: {e}")
 
-                # --- Now sae_features should be the correct tensor ---
+                # --- Apply Zeroing ---
                 modified_sae_features = sae_features.clone()
-
-                # Zero out specified features (logic remains the same)
                 if sae_features.ndim >= 2:
-                     num_actual_features = sae_features.shape[1]
-                     valid_indices = [idx for idx in self.features_to_zero if 0 <= idx < num_actual_features]
-                     if len(valid_indices) != len(self.features_to_zero):
-                          print(f"Warning: Invalid SAE feature indices detected in {self.features_to_zero} for SAE with {num_actual_features} features. Using only valid indices: {valid_indices}")
-
-                     if valid_indices:
-                          modified_sae_features[:, valid_indices] = 0.0
+                    num_actual_features = sae_features.shape[1]
+                    valid_indices = [idx for idx in self.features_to_zero if 0 <= idx < num_actual_features]
+                    if len(valid_indices) != len(self.features_to_zero):
+                        print(f"Warning: Invalid SAE feature indices detected in {self.features_to_zero} for SAE with {num_actual_features} features. Using only valid indices: {valid_indices}")
+                    if valid_indices:
+                        modified_sae_features[:, valid_indices] = 0.0
+                    # else: No modification needed if no valid indices
                 else:
-                     print(f"Warning: SAE feature tensor dimension ({sae_features.ndim}) not suitable for feature zeroing. Skipping.")
-                     modified_sae_features = sae_features # Keep original if shape is wrong
+                    print(f"Warning: SAE feature tensor dimension ({sae_features.ndim}) not suitable for feature zeroing. Skipping.")
+                    # Keep original if shape is wrong (modified_sae_features already holds clone)
 
-                # --- Align with sae_spatial_intervention.py: Use conv_dec for decoding ---
+                # --- Capture MODIFIED SAE activation tensor IF sequence capture is active ---
+                if self._is_capturing_activation_sequence:
+                    # Capture the state *after* zeroing
+                    self._captured_sae_activation_sequence.append(
+                        modified_sae_features.detach().clone().cpu()
+                    )
+                    # print(f"DEBUG: Appended activation frame {len(self._captured_sae_activation_sequence)}") # Optional debug
+                # ---
+
+                # --- Decode ---
                 if hasattr(self.sae, 'conv_dec'):
                     reconstructed_activations = self.sae.conv_dec(modified_sae_features)
                 else:
                     print("ERROR: Loaded SAE object does not have a 'conv_dec' attribute for decoding.")
                     raise AttributeError("Loaded SAE object does not have a 'conv_dec' attribute needed for decoding.")
-                # ---
 
                 return reconstructed_activations
-        # If no features specified or hook inactive, return original output
-        return output
+
+        # If no features specified or hook inactive, return original base layer output
+        return original_base_output
 
     def set_features_to_zero(self, feature_indices):
         """
@@ -325,3 +336,20 @@ class SAEZeroAblationExperiment:
         else:
              print(f"Warning: Could not determine number of SAE features for layer '{self.layer_name}' using dynamic checks (hidden_channels, cfg.d_sae, sae_dim, d_sae, W_enc, encoder.weight).")
              return None # Return None if all methods fail
+
+    # --- Modify methods for controlling capture ---
+    def start_activation_sequence_capture(self):
+        """Clears previous sequence and sets the flag to capture activations."""
+        print("DEBUG: Starting SAE activation sequence capture.")
+        self._captured_sae_activation_sequence = [] # Clear previous capture
+        self._is_capturing_activation_sequence = True
+
+    def stop_activation_sequence_capture(self):
+        """Stops capturing activations."""
+        print("DEBUG: Stopping SAE activation sequence capture.")
+        self._is_capturing_activation_sequence = False
+
+    def get_captured_activation_sequence(self):
+        """Returns the list of captured SAE activation tensors."""
+        return self._captured_sae_activation_sequence
+    # ---

@@ -12,11 +12,12 @@ from tqdm import tqdm
 import datetime
 import json # For saving list args
 import imageio # Add imageio import
+from PIL import Image # Ensure PIL is imported for resizing
 
 # Project imports
 from base_model_intervention import BaseModelInterventionExperiment
 from sae_spatial_intervention import SAEInterventionExperiment, ordered_layer_names as sae_ordered_layer_names
-from utils.environment_modification_experiments import create_multi_entity_no_locks_maze
+from utils.environment_modification_experiments import create_multi_entity_no_locks_maze, create_trident_maze
 from utils import helpers, heist # Import helpers to use its functions
 from zero_ablation_classes import BaseModelZeroAblationExperiment, SAEZeroAblationExperiment # Import new classes
 
@@ -51,6 +52,53 @@ def find_latest_checkpoint(layer_number, layer_name, base_dir="checkpoints"):
 
 # --- End Helper Functions ---
 
+# --- Modify Helper Function for Plotting Activations to Image ---
+def plot_activations_to_image(activation_tensor, title="SAE Activations", channels_to_plot=None):
+    """
+    Plots specified SAE activation channels and returns as a NumPy image array.
+    If channels_to_plot is None, plots all channels (original behavior).
+    """
+    # Ensure tensor is on CPU and detached
+    act_tensor_cpu = activation_tensor.detach().cpu()
+    # Remove batch dimension if present, assume (Features, H, W)
+    plot_tensor_full = act_tensor_cpu.squeeze(0) if act_tensor_cpu.ndim > 3 else act_tensor_cpu
+
+    # --- Select specific channels if requested ---
+    plot_tensor_selected = plot_tensor_full
+    num_total_features = plot_tensor_full.shape[0]
+    channels_actually_plotted = list(range(num_total_features)) # Default to all
+
+    if channels_to_plot is not None:
+        # Filter out invalid indices just in case
+        valid_channels = [c for c in channels_to_plot if 0 <= c < num_total_features]
+        if valid_channels:
+            plot_tensor_selected = plot_tensor_full[valid_channels, :, :]
+            channels_actually_plotted = valid_channels
+            title += f" (Showing Ablated Features: {channels_actually_plotted})"
+        else:
+            # If no valid channels provided, maybe plot nothing or fallback? Fallback for now.
+            print(f"Warning: No valid channels provided in channels_to_plot={channels_to_plot}. Plotting all.")
+            title += " (Plotting All Features - No valid ablated channels specified)"
+    # --- End channel selection ---
+
+    # Use a temporary dict key to avoid potential conflicts if layer name is 'activations'
+    plot_dict_key = "selected_activations"
+    fig = helpers.plot_layer_channels(
+        {plot_dict_key: plot_tensor_selected},
+        plot_dict_key,
+        return_image=True # Get the figure object
+    )
+    if fig is None:
+        print("Warning: plot_layer_channels returned None.")
+        return None
+
+    fig.canvas.draw()
+    width, height = fig.canvas.get_width_height()
+    image_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    image_array = image_array.reshape(height, width, 3)
+    plt.close(fig) # Close the figure to free memory
+    return image_array
+# --- End Helper Function Modification ---
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run zero-ablation intervention experiments.")
@@ -91,6 +139,11 @@ def parse_args():
                         help="Directory to save results (CSV and plots)")
     parser.add_argument("--num_top_channels_visualize", type=int, default=20,
                          help="Number of top channels to include in the result visualization")
+
+    # --- Ensure this argument is present ---
+    parser.add_argument("--visualize_sae_activations", action="store_true",
+                        help="If set and --is_sae, visualize the SAE activations for the first trial of the first ablated group/channel.")
+    # ---
 
     args = parser.parse_args()
 
@@ -453,7 +506,8 @@ def main():
     total_simulations = len(args.indices_to_ablate) * args.num_trials
     print(f"\nStarting experiment loops. Total simulations planned: {total_simulations}")
     experiment_count = 0
-    first_run_completed = False # Flag for debug GIF
+    first_ablation_setting_processed = False # Tracks if the first group/channel is done
+    visualization_gif_generated = False # Tracks if the GIF has been made
 
     # Determine loop description based on mode
     loop_desc = f"Ablation Groups ({args.zero_target_entity_name})" if args.ablation_mode == 'group' else f"Channels/Features ({args.zero_target_entity_name})"
@@ -469,9 +523,25 @@ def main():
         for trial in tqdm(range(args.num_trials), desc=trial_loop_desc, leave=False):
             experiment_count += 1
             venv_trial = None
+            # Determine if this specific trial should generate the visualization GIF
+            should_generate_visualization_gif = (
+                args.is_sae and
+                args.visualize_sae_activations and
+                not visualization_gif_generated and # Only generate once
+                trial == 0 and # Only for the first trial
+                not first_ablation_setting_processed # Only for the first ablation group/channel
+            )
+
             try:
+                # Start SAE activation capture if needed
+                if should_generate_visualization_gif:
+                    experiment.start_activation_sequence_capture()
+
                 # Create the special environment
-                observations, venv_trial = create_multi_entity_no_locks_maze(args.required_entity_codes)
+                # --- Use create_trident_maze (or appropriate function) ---
+                # Ensure the correct environment creation function is called
+                initial_obs_trial, venv_trial = create_trident_maze()
+                # ---
 
                 if venv_trial is None:
                     tqdm.write(f"  Skipping trial {trial+1} for channel {index_or_group} due to environment creation failure.")
@@ -491,42 +561,111 @@ def main():
                     })
                     continue
 
-                # --- Set the intervention for this specific trial ---
-                # Pass the list of indices (current_ablation_list)
+                # Set the intervention for this specific trial
                 if args.is_sae:
                     experiment.set_features_to_zero(current_ablation_list)
                 else:
                     experiment.set_channels_to_zero(current_ablation_list)
-                # ---
 
-                # Run the simulation
-                trial_result = run_ablation_simulation(
-                    experiment=experiment,
+                # Run the simulation/trial
+                trial_result = run_trial(
                     venv=venv_trial,
+                    model=experiment.model,
                     max_steps=args.max_steps,
-                    zero_target_entity_code=args.zero_target_entity_code,
-                    required_entity_codes=args.required_entity_codes,
-                    current_trial_number=trial + 1 # Pass trial number for context
+                    capture_observations=should_generate_visualization_gif
                 )
 
-                # --- Save Debug GIF for the very first run ---
-                if not first_run_completed:
-                    debug_observations = trial_result.get("observations", [])
-                    if debug_observations:
-                        # Include group info in debug filename
-                        debug_gif_filename = os.path.join(
-                            gif_dir,
-                            f"debug_first_run_{args.layer_name}_{'sae' if args.is_sae else 'base'}_ablating{group_str_repr}_trial{trial+1}.gif"
-                        )
+                # Stop SAE activation capture
+                if should_generate_visualization_gif:
+                    experiment.stop_activation_sequence_capture()
+
+                # --- Generate and Save Combined Observation/Activation GIF ---
+                if should_generate_visualization_gif:
+                    print("Generating post-ablation SAE activation sequence visualization GIF...")
+                    captured_observations = trial_result.get("observations", [])
+                    captured_activations_sequence = experiment.get_captured_activation_sequence()
+
+                    # --- Fix: Align lists by removing the initial observation frame ---
+                    if len(captured_observations) == len(captured_activations_sequence) + 1:
+                        print(f"DEBUG: Aligning lists. Removing first observation frame. Original lengths: Obs={len(captured_observations)}, Act={len(captured_activations_sequence)}")
+                        captured_observations = captured_observations[1:] # Slice to remove the first element
+                    # ---
+
+                    if captured_observations and captured_activations_sequence and len(captured_observations) == len(captured_activations_sequence):
+                        combined_frames = []
+                        num_frames = len(captured_observations)
+                        # --- Ensure PIL Image is available ---
                         try:
-                            imageio.mimsave(debug_gif_filename, debug_observations, fps=10)
-                            tqdm.write(f"  Saved DEBUG GIF for first run: {debug_gif_filename}")
-                        except Exception as gif_e:
-                            tqdm.write(f"  Warning: Failed to save DEBUG GIF for first run: {gif_e}")
+                            from PIL import Image
+                        except ImportError:
+                             print("ERROR: Pillow (PIL) is required for GIF generation but couldn't be imported inside the loop.")
+                             # Skip GIF generation if PIL not found here
+                             captured_observations = [] # Prevent further processing
+                        # ---
+
+                        if captured_observations: # Proceed only if PIL was imported and obs exist
+                            for i in tqdm(range(num_frames), desc="Generating GIF frames", leave=False):
+                                obs_frame = captured_observations[i]
+                                act_tensor = captured_activations_sequence[i]
+
+                                act_image = plot_activations_to_image(
+                                    act_tensor,
+                                    title=f"SAE Activations (Step {i}, Ablating: {current_ablation_list})"
+                                )
+
+                                if act_image is not None:
+                                    # --- Restore Resizing and Concatenation ---
+                                    try:
+                                        # Get observation height for resizing
+                                        obs_h = obs_frame.shape[0]
+                                        obs_w = obs_frame.shape[1]
+
+                                        # Resize activation image using PIL
+                                        act_pil = Image.fromarray(act_image)
+                                        # Calculate new width maintaining aspect ratio
+                                        act_h, act_w = act_image.shape[0], act_image.shape[1]
+                                        new_act_w = int(act_w * (obs_h / act_h))
+                                        act_resized_pil = act_pil.resize((new_act_w, obs_h), Image.Resampling.LANCZOS)
+                                        act_resized = np.array(act_resized_pil)
+
+                                        # Pad observation width if activation image is wider
+                                        if new_act_w > obs_w:
+                                             pad_width = new_act_w - obs_w
+                                             # Pad with black color (0)
+                                             obs_frame_padded = np.pad(obs_frame, ((0,0), (0, pad_width), (0,0)), mode='constant', constant_values=0)
+                                        else:
+                                             obs_frame_padded = obs_frame
+
+                                        # Pad activation width if observation image is wider
+                                        if obs_w > new_act_w:
+                                             pad_width = obs_w - new_act_w
+                                             act_resized_padded = np.pad(act_resized, ((0,0), (0, pad_width), (0,0)), mode='constant', constant_values=0)
+                                        else:
+                                             act_resized_padded = act_resized
+
+
+                                        # Concatenate horizontally
+                                        combined_frame = np.concatenate((obs_frame_padded, act_resized_padded), axis=1)
+                                        combined_frames.append(combined_frame)
+                                        # --- End Restore ---
+                                    except Exception as resize_err:
+                                        print(f"Warning: Error resizing/combining frame {i}: {resize_err}")
+                                else:
+                                    print(f"Warning: Skipping frame {i} due to activation plotting error.")
+
+                            if combined_frames:
+                                vis_gif_filename = os.path.join(gif_dir, f"post_ablation_sae_activations_layer{args.layer_number}_group_{group_str_repr}.gif")
+                                try:
+                                    imageio.mimsave(vis_gif_filename, combined_frames, fps=10)
+                                    print(f"Saved combined activation GIF to {vis_gif_filename}")
+                                    visualization_gif_generated = True # Set flag AFTER successful save
+                                except Exception as gif_err:
+                                    print(f"Error saving combined activation GIF: {gif_err}")
+                            else:
+                                print("Warning: No combined frames were generated for the activation GIF.")
                     else:
-                         tqdm.write("  Warning: No observations found in first run result to save debug GIF.")
-                    first_run_completed = True
-                # --- End Save Debug GIF ---
+                        print(f"Warning: Skipping activation GIF generation for trial {trial+1} due to missing data or inconsistent lengths between observations ({len(captured_observations if captured_observations else [])}) and activations ({len(captured_activations_sequence if captured_activations_sequence else [])}).")
+                # --- End GIF Generation ---
 
                 # Calculate success for this trial
                 success = (
@@ -592,14 +731,17 @@ def main():
                      "success": False,
                      "final_player_pos_y": -1, "final_player_pos_x": -1,
                  })
-                 if not first_run_completed: first_run_completed = True # Mark debug GIF done on error too
             finally:
-                # --- Crucially, disable intervention after each trial ---
+                # Disable intervention and close env
                 if experiment is not None:
-                    experiment.disable_zeroing() # Removes the hook
-                # ---
+                    experiment.disable_zeroing()
                 if venv_trial is not None:
                     venv_trial.close()
+
+        # Mark first setting as processed after all trials for it are done
+        if not first_ablation_setting_processed:
+            first_ablation_setting_processed = True
+
     # --- End Experiment Loop ---
 
 
@@ -670,6 +812,131 @@ def main():
     # --- End Visualize Results ---
 
     print(f"\nZero-ablation experiment finished for target: {args.zero_target_entity_name}.")
+
+# --- Ensure run_trial function is defined correctly ---
+def run_trial(venv, model, max_steps, capture_observations=False):
+    """
+    Runs a single trial (episode) in the environment.
+    Optionally captures observation frames and collects entity codes.
+    """
+    obs = venv.reset()
+    done = False
+    step = 0
+    total_reward = 0
+    frames = [] # Only populated if capture_observations is True
+    collected_codes_this_trial = set() # Use a set to avoid duplicates
+    final_player_pos = None
+    outcome = "timeout" # Default outcome
+
+    while not done and step < max_steps:
+        # Capture observation frame if requested
+        if capture_observations:
+            # Render the environment frame BEFORE taking the step
+            rendered_frame = venv.render(mode='rgb_array')
+            if rendered_frame is not None:
+                 frames.append(rendered_frame)
+            else:
+                 print(f"Warning: venv.render returned None at step {step}")
+
+
+        with torch.no_grad():
+            # Determine device from model parameters
+            try:
+                model_device = next(model.parameters()).device
+            except StopIteration:
+                 print("Error: Model has no parameters. Cannot determine device.")
+                 model_device = torch.device("cpu")
+
+            # Prepare observation tensor
+            # Assuming obs[0] is the relevant part if it's a tuple/list (from VecEnv)
+            current_obs_data = obs[0] if isinstance(obs, (list, tuple)) else obs
+
+            # --- Fix 1 (Revised): Handle potential extra dimension ---
+            # Ensure current_obs_data is a NumPy array first
+            if not isinstance(current_obs_data, np.ndarray):
+                 print(f"Warning: current_obs_data is not a numpy array (type: {type(current_obs_data)}). Attempting conversion.")
+                 try:
+                     current_obs_data = np.array(current_obs_data)
+                 except Exception as e:
+                     print(f"ERROR: Failed to convert current_obs_data to numpy array: {e}")
+                     # Handle error appropriately - maybe raise or break
+                     raise RuntimeError("Failed to process observation data.") from e
+
+            # Check shape and squeeze if necessary (e.g., if shape is (1, H, W, C))
+            if current_obs_data.ndim == 4 and current_obs_data.shape[0] == 1:
+                current_obs_data = current_obs_data.squeeze(0) # Remove leading dimension of size 1
+
+            # Expecting 3D (H, W, C) at this point
+            if current_obs_data.ndim != 3:
+                 print(f"ERROR: Unexpected observation dimension after processing: {current_obs_data.ndim}. Shape: {current_obs_data.shape}")
+                 # Handle error - maybe raise or break
+                 raise RuntimeError(f"Unexpected observation dimension: {current_obs_data.ndim}")
+
+            # Convert HWC to CHW, then add Batch dim
+            obs_tensor = torch.tensor(current_obs_data, dtype=torch.float32, device=model_device).permute(2, 0, 1).unsqueeze(0)
+            # ---
+
+            # Get action from model
+            try:
+                policy_dist, value = model(obs_tensor)
+                # --- Fix 2: Ensure action is numpy array (should already be) ---
+                # This calculation should yield np.array([action_value]) for batch size 1
+                action = policy_dist.logits.argmax(dim=-1).cpu().numpy()
+                # ---
+            except Exception as model_err:
+                 print(f"Error during model forward pass or action selection: {model_err}")
+                 # Fallback to random action
+                 action = np.array([venv.action_space.sample()]) # Ensure it's a numpy array
+
+        # Step environment
+        try:
+            # Pass the numpy array directly (e.g., np.array([action_value]))
+            obs, reward, done, info = venv.step(action)
+            total_reward += reward
+            step += 1
+
+            # --- Collect entity codes from info ---
+            # Handle VecEnv wrapper potentially returning list for info
+            info_dict = info[0] if isinstance(info, list) and len(info) > 0 else info
+            if isinstance(info_dict, dict) and 'collected_entity_codes' in info_dict:
+                 newly_collected = set(info_dict['collected_entity_codes'])
+                 collected_codes_this_trial.update(newly_collected)
+            # ---
+
+            # Store final player position if available
+            if isinstance(info_dict, dict) and 'player_pos' in info_dict:
+                 final_player_pos = info_dict['player_pos'] # Assuming (y, x) tuple
+
+        except Exception as env_err:
+             print(f"Error during environment step: {env_err}")
+             # Print action type/shape for debugging
+             print(f"DEBUG: Action type={type(action)}, shape={getattr(action, 'shape', 'N/A')}, value={action}")
+             done = True # End trial on environment error
+             outcome = f"error_env_step_{type(env_err).__name__}"
+
+
+    # Determine final outcome
+    if not done and step >= max_steps:
+        outcome = "timeout"
+    elif done and outcome == "timeout": # If done flag was set by env without error
+         outcome = "completed" # Assume normal completion if done is True
+
+    # Capture final frame if needed
+    if capture_observations and not done: # Capture last frame if timeout
+        rendered_frame = venv.render(mode='rgb_array')
+        if rendered_frame is not None:
+            frames.append(rendered_frame)
+
+    return {
+        "outcome": outcome,
+        "total_reward": total_reward,
+        "steps": step,
+        "observations": frames, # List of RGB arrays
+        "collected_entity_codes": sorted(list(collected_codes_this_trial)), # Return sorted list
+        "final_player_pos": final_player_pos,
+    }
+# --- End run_trial function ---
+
 
 if __name__ == "__main__":
     main() 
