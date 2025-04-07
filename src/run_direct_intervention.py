@@ -6,6 +6,22 @@ from intervention_base import create_trajectory_based_intervention
 from sae_cnn import ordered_layer_names
 import imageio
 
+from procgen import ProcgenEnv
+from procgen.gym_registration import make_env
+
+from utils.environment_modification_experiments import create_box_maze
+
+ENTITY_CODE_DESCRIPTION = {
+    3: "gem",
+    4: "blue_key",
+    5: "green_key",
+    6: "red_key",
+    7: "blue_lock",
+    8: "green_lock",
+    9: "red_lock"
+}
+ENTITY_DESCRIPTION_CODE = {v: k for k, v in ENTITY_CODE_DESCRIPTION.items()}
+
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Run direct model layer intervention experiments")
@@ -29,8 +45,6 @@ def parse_args():
                         help="Secondary entity code (optional)")
     
     # Experiment settings
-    parser.add_argument("--maze_variant", type=int, default=0,
-                        help="Maze variant to use (0-7, default: 0)")
     parser.add_argument("--max_steps", type=int, default=20,
                         help="Maximum number of steps to run")
     parser.add_argument("--save_gif_freq", type=int, default=1,
@@ -50,7 +64,7 @@ def parse_args():
     
     # Environment type
     parser.add_argument("--box_maze", action="store_true",
-                        help="Use box maze environment (for entity tracking) instead of L-shaped maze")
+                        help="Use box maze environment (with specific entities) instead of default L-shaped Procgen maze")
     
     return parser.parse_args()
 
@@ -124,7 +138,6 @@ def main():
     """Main function to run experiments"""
     args = parse_args()
     
-    # Create output directory
     os.makedirs(args.output, exist_ok=True)
     
     # Determine layer information
@@ -179,59 +192,61 @@ def main():
             rad = cfg.get("radius", 0)
             print(f"  {i+1}. Channel {ch}: zero out and set value {val} at position {pos} with radius {rad}")
     
-    # Create options dictionary for the run_maze_experiment method
-    options = {
-        "maze_variant": args.maze_variant,
-        "max_steps": args.max_steps,
-        "save_gif": True,
-        "output_path": args.output,
-        "save_gif_freq": args.save_gif_freq,
-        "max_gif_frames": args.max_gif_frames
-    }
-    
-    # Add entity codes if using box maze
-    if args.box_maze:
-        options["entity1_code"] = args.entity1_code
-        options["entity2_code"] = args.entity2_code
-        options["use_box_maze"] = True
+    # --- Environment Creation --- 
+    venv = None
+    try:
+        # if args.box_maze:
+        print(f"Creating box maze with entity codes: primary={args.entity1_code}, secondary={args.entity2_code}")
+        env_args = {"entity1": args.entity1_code, "entity2": args.entity2_code}
+        _, venv = create_box_maze(**env_args) # Get the venv object
         
         # Map entity code to description for better output file naming
-        entity_code_description = {
-            3: "gem",
-            4: "blue_key",
-            5: "green_key",
-            6: "red_key",
-            7: "blue_lock",
-            8: "green_lock",
-            9: "red_lock"
-        }
-        entity_desc = entity_code_description.get(args.entity1_code, f"entity_{args.entity1_code}")
+        entity_desc = ENTITY_CODE_DESCRIPTION.get(args.entity1_code, f"entity_{args.entity1_code}")
         
         # Create entity-specific output subdirectory
-        entity_output = f"{args.output}/entity_{args.entity1_code}_{entity_desc}"
+        entity_output = os.path.join(args.output, f"entity_{args.entity1_code}_{entity_desc}")
         os.makedirs(entity_output, exist_ok=True)
-        options["output_path"] = entity_output
+        output_path = entity_output # Use this path for results/gifs
+
+        # --- Prepare Options for run_maze_experiment ---
+        options = {
+            # Removed maze_variant as it's handled by env creation
+            "venv": venv, # Pass the created environment
+            "max_steps": args.max_steps,
+            "save_gif": True,
+            "output_path": output_path, # Use determined output path
+            "save_gif_freq": args.save_gif_freq,
+            "max_gif_frames": args.max_gif_frames
+            # Removed entity codes and use_box_maze, handled above
+        }
+        # --- End Options Preparation ---
         
-        print(f"Using box maze with entity codes: primary={args.entity1_code}, secondary={args.entity2_code}")
-    
-    # Run experiment with the appropriate options
-    result = experiment.run_maze_experiment(**options)
-    
-    # Print results
-    print("\nExperiment Results:")
-    print(f"Total steps: {result['total_steps']}")
-    print(f"Total reward: {result['total_reward']}")
-    print(f"Intervention type: {result['intervention_type']}")
-    
-    # Print entity information if using box maze
-    if args.box_maze:
-        print(f"Primary entity: {entity_code_description.get(args.entity1_code, args.entity1_code)}")
-        if args.entity2_code:
-            print(f"Secondary entity: {entity_code_description.get(args.entity2_code, args.entity2_code)}")
-    
-    print(f"Output saved to: {os.path.abspath(options['output_path'])}")
-    
-    return result
+        # Run experiment with the appropriate options
+        result = experiment.run_maze_experiment(**options)
+        
+        # Print results
+        print("\nExperiment Results:")
+        print(f"Total steps: {result['total_steps']}")
+        print(f"Total reward: {result['total_reward']}")
+        print(f"Intervention type: {result['intervention_type']}")
+        
+        # Print entity information if using box maze
+        if args.box_maze:
+            print(f"Primary entity: {ENTITY_CODE_DESCRIPTION.get(args.entity1_code, args.entity1_code)}")
+            if args.entity2_code:
+                print(f"Secondary entity: {ENTITY_CODE_DESCRIPTION.get(args.entity2_code, args.entity2_code)}")
+        else:
+            print("Using default Procgen maze.")
+        
+        print(f"Output saved to: {os.path.abspath(options['output_path'])}")
+        
+        return result
+
+    finally:
+        # Ensure environment is closed
+        if venv is not None:
+            print("Closing environment...")
+            venv.close()
 
 if __name__ == "__main__":
     main() 
