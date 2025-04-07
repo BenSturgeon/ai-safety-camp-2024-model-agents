@@ -99,38 +99,27 @@ class InterventionExperiment:
         self.dynamic_intervention = None
         print("Interventions disabled")
     
-    def run_maze_experiment(self, maze_variant=0, max_steps=100, save_gif=True, 
+    def run_maze_experiment(self, venv, max_steps=100, save_gif=True, 
                            output_path="intervention_results", save_gif_freq=1,
-                           max_gif_frames=0, entity1_code=4, entity2_code=None, use_box_maze=False):
+                           max_gif_frames=0):
         """
-        Run an experiment with a specific maze variant.
+        Run an experiment with a given environment.
         
         Args:
-            maze_variant (int): Maze variant to use (0-7)
+            venv (ProcgenEnv): The pre-initialized Procgen environment.
             max_steps (int): Maximum number of steps to run
             save_gif (bool): Whether to save a GIF of the experiment
             output_path (str): Directory to save results
             save_gif_freq (int): Save every Nth timestep in activation GIFs (default: 1 = all frames)
             max_gif_frames (int): Maximum number of frames to include in GIFs (0=all frames)
-            entity1_code (int): Primary entity code to use in box maze (default: 4, blue key)
-            entity2_code (int): Secondary entity code for box maze (optional)
-            use_box_maze (bool): Whether to use box maze instead of L-shaped maze
             
         Returns:
             dict: Results of the experiment
         """
-        # Create appropriate maze environment
-        if use_box_maze:
-            # Import box maze only when needed
-            from utils.environment_modification_experiments import create_box_maze
-            print(f"Creating box maze with entity codes: primary={entity1_code}, secondary={entity2_code}")
-            observations, venv = create_box_maze(entity1=entity1_code, entity2=entity2_code)
-        else:
-            # Use L-shaped maze
-            print(f"Creating L-shaped maze variant {maze_variant}")
-            venv = create_specific_l_shaped_maze_env(maze_variant=maze_variant)
-            observations = None  # We'll collect these in the loop
-        
+        # Environment is now passed in, no need to create it here.
+        # Ensure output path exists
+        os.makedirs(output_path, exist_ok=True)
+
         # Reset buffers
         self.original_activations = []
         self.modified_activations = []
@@ -139,12 +128,11 @@ class InterventionExperiment:
         handle = self.module.register_forward_hook(self._hook_activations)
         
         # Run the agent in the environment
-        observation = venv.reset()
+        observation = venv.reset() # Reset the provided environment
         frames = []
         
-        # Initialize observations list if needed
-        if not use_box_maze or observations is None:
-            observations = []
+        # Initialize observations list (may not be needed if handled by caller)
+        observations = []
         
         total_reward = 0
         steps = 0
@@ -154,9 +142,8 @@ class InterventionExperiment:
         if save_gif:
             frames.append(venv.render(mode="rgb_array"))
             
-        # For L-shaped maze, we need to collect observations
-        if not use_box_maze:
-            observations.append(observation[0])
+        # We probably always want the first observation
+        observations.append(observation[0])
         
         intervention_type = "none"
         if self.intervention_active:
@@ -166,99 +153,80 @@ class InterventionExperiment:
         
         print(f"Running agent with {intervention_type} intervention for max {max_steps} steps")
         
-        while not done and steps < max_steps:
-            # Prepare observation for the model
-            obs = observation[0]
-            
-            # For L-shaped maze, collect observations
-            if not use_box_maze:
+        try:
+            while not done and steps < max_steps:
+
+                if isinstance(observation, tuple):
+                    obs = observation[0]
+                elif isinstance(observation, dict): # 
+                    obs = observation['rgb'] 
+                elif isinstance(observation, np.ndarray):
+                    obs = observation
+                else:
+                    raise TypeError(f"Unexpected observation type: {type(observation)}")
+                
                 observations.append(obs)
-            
-            # Convert observation to RGB
-            converted_obs = helpers.observation_to_rgb(obs)
-            obs_tensor = torch.tensor(converted_obs, dtype=torch.float32).to(self.device)
-            
-            # Make sure obs_tensor has 4 dimensions (add batch dimension if needed)
-            if obs_tensor.ndim == 3:
-                obs_tensor = obs_tensor.unsqueeze(0)  # Add batch dimension
-            
-            # Get model output with intervention (if active)
-            with torch.no_grad():
-                outputs = self.model(obs_tensor)
-            
-            # Get action from model output
-            if hasattr(outputs, 'logits'):
-                logits = outputs.logits
-            else:
-                logits = outputs[0].logits
                 
-            probabilities = torch.nn.functional.softmax(logits, dim=-1)
-            action = torch.multinomial(probabilities, num_samples=1).squeeze(-1)
-            
-            # Take action in environment
-            observation, reward, done, info = venv.step(action.cpu().numpy())
-            
-            # Record frame
-            if save_gif:
-                frames.append(venv.render(mode="rgb_array"))
+                converted_obs = helpers.observation_to_rgb(obs)
+                obs_tensor = torch.tensor(converted_obs, dtype=torch.float32).to(self.device)
                 
-            total_reward += reward
-            steps += 1
-            
-        # Remove hook
-        handle.remove()
-        
-        # Close environment
-        venv.close()
+                if obs_tensor.ndim == 3:
+                    obs_tensor = obs_tensor.unsqueeze(0)  
+                with torch.no_grad():
+                    outputs = self.model(obs_tensor)
+                
+                if hasattr(outputs, 'logits'):
+                    logits = outputs.logits
+                else:
+                    logits = outputs[0].logits
+                    
+                probabilities = torch.nn.functional.softmax(logits, dim=-1)
+                action = torch.multinomial(probabilities, num_samples=1).squeeze(-1)
+                
+                observation, reward, done, info = venv.step(action.cpu().numpy())
+                
+                if save_gif:
+                    frames.append(venv.render(mode="rgb_array"))
+                    
+                total_reward += reward
+                steps += 1
+        finally:
+
+            handle.remove()
         
         print(f"Episode complete: {steps} steps, reward {total_reward}")
         
         # Save results
         if save_gif and frames:
-            os.makedirs(output_path, exist_ok=True)
-            
-            # Create descriptive filename
+
             if intervention_type == "static":
                 channels_str = "_".join([str(cfg["channel"]) for cfg in self.intervention_config])
-                filename = f"maze_{maze_variant}_static_ch{channels_str}"
+                filename = f"static_intervention_ch{channels_str}"
             elif intervention_type == "dynamic":
-                filename = f"maze_{maze_variant}_dynamic"
+                filename = f"dynamic_intervention"
             else:
-                filename = f"maze_{maze_variant}_baseline"
+                filename = f"baseline_run"
             
-            # Add entity info to filename if using box maze
-            if use_box_maze:
-                entity_info = f"entity{entity1_code}"
-                if entity2_code is not None:
-                    entity_info += f"_entity{entity2_code}"
-                filename = f"{filename}_{entity_info}"
-            
-            gif_path = f"{output_path}/{filename}.gif"
+            gif_path = os.path.join(output_path, f"{filename}.gif")
             imageio.mimsave(gif_path, frames, fps=10)
             print(f"Saved GIF to {gif_path}")
             
-            # Save visualization of activations
+
             if len(self.original_activations) > 0:
-                self._visualize_activations(output_path, maze_variant, intervention_type)
-                # Also create GIFs of activation changes over time
-                self._create_activation_gifs(output_path, maze_variant, intervention_type, 
+                
+                maze_placeholder = "box" if "entity_" in output_path else "default" 
+                self._visualize_activations(output_path, maze_placeholder, intervention_type)
+                self._create_activation_gifs(output_path, maze_placeholder, intervention_type, 
                                             frames=frames, save_gif_freq=save_gif_freq,
                                             max_gif_frames=max_gif_frames)
         
         results = {
-            "maze_variant": maze_variant,
             "total_steps": steps,
             "total_reward": total_reward,
             "intervention_type": intervention_type,
             "intervention_config": self.intervention_config,
             "output_path": output_path
         }
-        
-        # Add entity info to results if using box maze
-        if use_box_maze:
-            results["entity1_code"] = entity1_code
-            results["entity2_code"] = entity2_code
-            results["use_box_maze"] = True
         
         return results
     
