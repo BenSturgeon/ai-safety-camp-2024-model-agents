@@ -7,8 +7,7 @@ from tqdm import tqdm
 import imageio
 from intervention_base import InterventionExperiment
 
-# Import visualization functions from SAE implementation
-from sae_spatial_intervention import SAEInterventionExperiment
+
 
 
 class DirectInterventionExperiment(InterventionExperiment):
