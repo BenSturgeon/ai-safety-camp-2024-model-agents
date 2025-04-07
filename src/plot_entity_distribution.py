@@ -8,16 +8,26 @@ import argparse
 from pathlib import Path
 import sys
 
-# Entity-specific colors
-ENTITY_COLORS = {
-    'gem': 'gold',
+# --- Configuration ---
+DEFAULT_RESULTS_DIR = "/home/ubuntu/east-ben/ai-safety-camp-2024-model-agents/src/quant_results_parallel_8_sae_vast_blue_key"
+TARGET_ENTITIES = ['gem', 'blue_key', 'green_key', 'red_key'] # Entities to include in the plot
+ENTITY_COLORS = { # Entity-specific colors
+    # 'gem': 'gold',
     'blue_key': 'royalblue',
-    'green_key': 'forestgreen',
-    'red_key': 'firebrick'
+    # 'green_key': 'forestgreen',
+    # 'red_key': 'firebrick'
 }
+# -------------------
 
-# Entities to include in the plot
-TARGET_ENTITIES = ['gem', 'blue_key', 'green_key', 'red_key']
+def is_running_in_jupyter():
+    """Check if the current script is running in a Jupyter kernel."""
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None:
+            return True
+        return False
+    except ImportError:
+        return False
 
 def combine_entity_csv_files(base_dir):
     """
@@ -27,9 +37,13 @@ def combine_entity_csv_files(base_dir):
         base_dir (str): Base directory containing entity result subdirectories
         
     Returns:
-        pd.DataFrame: Combined dataframe with all entity data
+        Tuple[pd.DataFrame, str]: Combined dataframe and the layer name found in CSV filenames
     """
     all_data = []
+    found_layer_name = None # Store the layer name found in the first valid CSV
+    expected_filename = "quantitative_results_conv4a_sae.csv" # UPDATED specific filename
+    
+    print(f"Searching for exact filename: '{expected_filename}'")
     
     # Check each entity directory
     for entity in TARGET_ENTITIES:
@@ -38,39 +52,56 @@ def combine_entity_csv_files(base_dir):
             print(f"Directory not found for {entity}: {entity_dir}")
             continue
             
-        # Look for the CSV file
-        csv_path = os.path.join(entity_dir, "quantitative_results_conv3a_base.csv")
-        if not os.path.exists(csv_path):
-            print(f"CSV file not found for {entity}: {csv_path}")
+        # Look for the exact CSV filename directly in the entity_dir
+        csv_path = Path(entity_dir) / expected_filename
+        
+        if not csv_path.exists():
+            print(f"File '{expected_filename}' not found for {entity} directly in: {entity_dir}")
             continue
             
         print(f"Loading data for {entity} from {csv_path}")
-        entity_df = pd.read_csv(csv_path)
+        try:
+            entity_df = pd.read_csv(csv_path)
+            
+            # Extract layer name from the first successfully loaded CSV filename
+            if found_layer_name is None:
+                parts = csv_path.stem.split('_') # E.g., ['quantitative', 'results', 'conv3a', 'base']
+                if len(parts) > 2:
+                    # Assume layer name is the third part (adjust if needed)
+                    found_layer_name = parts[2] 
+                    print(f"  Inferred layer name '{found_layer_name}' from filename {csv_path.name}")
+                else:
+                    print(f"  Warning: Could not infer layer name from filename {csv_path.name}")
+                    
+        except Exception as e:
+            print(f"  Error loading CSV {csv_path}: {e}")
+            continue
         
         # Verify the entity name in the data matches our expected entity
-        # (Some datasets might use different names internally)
         unique_entities = entity_df['target_entity_name'].unique()
-        print(f"Entities found in {entity} data: {unique_entities}")
+        print(f"  Entities found in {entity} data: {unique_entities}")
         
         # Add to our combined dataset
         all_data.append(entity_df)
     
     if not all_data:
         print("No entity data found!")
-        return None
+        return None, None # Return None for layer name too
         
     # Combine all dataframes
     combined_df = pd.concat(all_data, ignore_index=True)
     print(f"Combined data has {len(combined_df)} rows from {len(all_data)} entity files")
-    return combined_df
+    
+    # Use the layer name inferred from the first valid file found
+    final_layer_name = found_layer_name if found_layer_name else "UnknownLayer" 
+    return combined_df, final_layer_name
 
-def main(results_dir, output_png=None, num_top_channels=20, auto_select_first_file=True):
+def main(results_dir, num_top_channels=20, auto_select_first_file=True):
     """
     Generate bubble plots showing distribution of successful interventions by entity.
     
     Args:
         results_dir (str): Directory containing quantitative results CSV files
-        output_png (str): Path to save the output plot (optional)
         num_top_channels (int): Number of top performing channels to include
         auto_select_first_file (bool): Automatically use the first file found (for interactive use)
     """
@@ -84,7 +115,7 @@ def main(results_dir, output_png=None, num_top_channels=20, auto_select_first_fi
     print(f"Using results directory: {results_dir}")
     
     # Load combined data from entity subdirectories
-    results_df = combine_entity_csv_files(results_dir)
+    results_df, layer_name = combine_entity_csv_files(results_dir) # Get layer name
     
     if results_df is None or len(results_df) == 0:
         print("No valid data found. Exiting.")
@@ -216,54 +247,48 @@ def main(results_dir, output_png=None, num_top_channels=20, auto_select_first_fi
     plt.xlabel("Channel Index")
     plt.ylabel("Successful Intervention Value")
     
-    # Create more informative title
-    plt.title(f"Distribution of Successful Interventions by Entity Type\nLayer: conv3a | Entities: {len(entities_present)}")
+    # Create more informative title using the found layer name
+    title_layer_name = layer_name if layer_name else "UnknownLayer"
+    plt.title(f"Distribution of Successful Interventions by Entity Type\nLayer: {title_layer_name} SAE | Entities: {len(entities_present)}")
     plt.legend(title='Entity Type', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(axis='both', linestyle='--', alpha=0.6)  # Grid on both axes for better readability
     plt.tight_layout(rect=[0, 0, 0.85, 1])  # Ensure layout handles the legend
     
-    # Save if output_png specified
-    if output_png:
-        output_dir = os.path.dirname(output_png)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(output_png, bbox_inches='tight')
-        print(f"Entity distribution plot saved to: {output_png}")
+    # Construct output PNG path dynamically
+    output_filename = f"entity_distribution_plot_{layer_name}.png"
+    output_png_path = os.path.join(results_dir, output_filename)
+    
+    # Save the plot to the determined path
+    try:
+        plt.savefig(output_png_path, bbox_inches='tight')
+        print(f"\nEntity distribution plot saved to: {output_png_path}")
+    except Exception as e:
+        print(f"\nError saving plot to {output_png_path}: {e}")
     
     # Always display the plot - important for interactive mode
     print("Displaying plot...")
     plt.show()
     
-    return plt  
+    return plt
 
+# For interactive mode use - will run when imported in Jupyter
 if is_running_in_jupyter():
-    # Path to the results directory
-    results_dir = "/home/ubuntu/east-ben/ai-safety-camp-2024-model-agents/src/quant_results_parallel_base_conv3a"
+    results_dir = DEFAULT_RESULTS_DIR # Use the configured default
     print(f"Running in interactive mode. Using results directory: {results_dir}")
-    main(results_dir)    
+    main(results_dir)
 
-def is_running_in_jupyter():
-    """Check if the current script is running in a Jupyter kernel."""
-    try:
-        from IPython import get_ipython
-        if get_ipython() is not None:
-            return True
-        return False
-    except ImportError:
-        return False
+
 
 # For running directly (in command line)
 if __name__ == "__main__" and not is_running_in_jupyter():
     parser = argparse.ArgumentParser(description="Generate entity distribution plots with custom colors")
-    parser.add_argument("--results_dir", type=str, 
-                        default="/home/ubuntu/east-ben/ai-safety-camp-2024-model-agents/src/quant_results_parallel_base_conv3a",
-                        help="Directory containing quantitative results CSV files")
-    parser.add_argument("--output_png", type=str, default=None,
-                        help="Path to save the output PNG file (optional)")
+    parser.add_argument("--results_dir", type=str,
+                        default=DEFAULT_RESULTS_DIR, # Use the configured default
+                        help="Directory containing entity result subdirectories")
     parser.add_argument("--num_top_channels", type=int, default=20,
                         help="Number of top performing channels to include in the plot")
-    
+
     args = parser.parse_args()
-    main(args.results_dir, args.output_png, args.num_top_channels)
+    main(args.results_dir, args.num_top_channels) # Pass only relevant args
 
 # %%
