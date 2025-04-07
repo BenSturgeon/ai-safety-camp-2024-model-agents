@@ -79,43 +79,7 @@ def find_latest_checkpoint(layer_number, layer_name, base_dir=DEFAULT_SAE_CHECKP
 
     return latest_checkpoint
 
-def find_latest_model_checkpoint(base_dir=DEFAULT_MODEL_BASE_DIR):
-    """Finds the latest base model checkpoint based on step count or modification time."""
-    if not os.path.isdir(base_dir):
-        print(f"Warning: Model checkpoint base directory not found: {base_dir}")
-        return None
 
-    # Search potentially nested directories, e.g., models/maze_I/
-    checkpoints = glob.glob(os.path.join(base_dir, "**", "*.pt"), recursive=True)
-    if not checkpoints:
-        print(f"Warning: No .pt files found in {base_dir} or its subdirectories.")
-        return None
-
-    latest_checkpoint = None
-    max_steps = -1
-
-    # Adjust regex if model checkpoints have a different naming pattern
-    # Example: checkpoint_78643200_steps.pt
-    step_pattern = re.compile(r"checkpoint_(\d+)_steps\.pt$")
-
-    for ckpt_path in checkpoints:
-        match = step_pattern.search(os.path.basename(ckpt_path))
-        if match:
-            steps = int(match.group(1))
-            if steps > max_steps:
-                max_steps = steps
-                latest_checkpoint = ckpt_path
-
-    # Fallback if no files match the step pattern
-    if latest_checkpoint is None:
-         print(f"Warning: Could not parse step count from model checkpoint names in {base_dir}. Using file with latest modification time.")
-         try:
-            latest_checkpoint = max(checkpoints, key=os.path.getmtime)
-         except Exception as e:
-             print(f"Error finding latest model checkpoint by time: {e}")
-             latest_checkpoint = checkpoints[-1]
-
-    return latest_checkpoint
 
 def parse_args():
     """Parse command line arguments"""
@@ -129,7 +93,7 @@ def parse_args():
     parser.add_argument("--sae_checkpoint_path", type=str, default=None,
                         help=f"Path to the SAE checkpoint. If --is_sae is set and this is omitted, tries to find the latest in {DEFAULT_SAE_CHECKPOINT_DIR}/layer_{{layer_spec}}_{{layer_name}}/")
     parser.add_argument("--layer_spec", type=str, required=True,
-                        help="Layer specification: either base model layer name (e.g., 'conv4a') or SAE layer number (e.g., '8')")
+                        help="Layer specification: either base model layer name (e.g., 'conv_seqs.2.res_block1.conv1') or SAE layer number (e.g., '18')")
     parser.add_argument("--is_sae", action="store_true",
                         help="Flag indicating the layer_spec refers to an SAE layer number")
 

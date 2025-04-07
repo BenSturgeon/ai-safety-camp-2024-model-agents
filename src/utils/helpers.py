@@ -2,7 +2,9 @@ import torch.nn as nn
 import torch as t
 import imageio
 from torch.nn import functional as F
-
+import re
+import glob
+import os
 
 import gym
 
@@ -142,7 +144,10 @@ def generate_action(model, obs, is_procgen_env=True):
     with t.no_grad():
         if len(obs.shape) == 3:
             obs = np.expand_dims(obs, axis=0).to(device)
-        obs = t.from_numpy(obs).float().to(device)
+        if isinstance(obs, np.ndarray):
+            obs = t.from_numpy(obs).float().to(device)
+        elif isinstance(obs, t.Tensor):
+            obs = obs.float().to(device)
         model.to(device)
         outputs = model(obs)
     logits = outputs[0].logits if isinstance(outputs, tuple) else outputs.logits
@@ -153,7 +158,43 @@ def generate_action(model, obs, is_procgen_env=True):
     return actions.cpu()
 
 
+def find_latest_model_checkpoint(base_dir):
+    """Finds the latest base model checkpoint based on step count or modification time."""
+    if not os.path.isdir(base_dir):
+        print(f"Warning: Model checkpoint base directory not found: {base_dir}")
+        return None
 
+    # Search potentially nested directories, e.g., models/maze_I/
+    checkpoints = glob.glob(os.path.join(base_dir, "**", "*.pt"), recursive=True)
+    if not checkpoints:
+        print(f"Warning: No .pt files found in {base_dir} or its subdirectories.")
+        return None
+
+    latest_checkpoint = None
+    max_steps = -1
+
+    # Adjust regex if model checkpoints have a different naming pattern
+    # Example: checkpoint_78643200_steps.pt
+    step_pattern = re.compile(r"checkpoint_(\d+)_steps\.pt$")
+
+    for ckpt_path in checkpoints:
+        match = step_pattern.search(os.path.basename(ckpt_path))
+        if match:
+            steps = int(match.group(1))
+            if steps > max_steps:
+                max_steps = steps
+                latest_checkpoint = ckpt_path
+
+    # Fallback if no files match the step pattern
+    if latest_checkpoint is None:
+         print(f"Warning: Could not parse step count from model checkpoint names in {base_dir}. Using file with latest modification time.")
+         try:
+            latest_checkpoint = max(checkpoints, key=os.path.getmtime)
+         except Exception as e:
+             print(f"Error finding latest model checkpoint by time: {e}")
+             latest_checkpoint = checkpoints[-1]
+
+    return latest_checkpoint
 
 def load_interpretable_model(
     ImpalaCNN=interpretable_CNN, model_path="../model_interpretable.pt"
