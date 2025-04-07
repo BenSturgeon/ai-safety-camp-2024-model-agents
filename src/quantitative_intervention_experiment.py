@@ -304,27 +304,19 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         layer_name = getattr(experiment, 'layer_name', None)
         layer_number = getattr(experiment, 'layer_number', None)
 
-        if layer_number == 8 or layer_name == 'conv4a':
-            act_h, act_w = 8, 8
-        elif layer_number == 6 or layer_name == 'conv3a':
-            act_h, act_w = 16, 16
-        else:
-             # Attempt to infer from first activation if available (less reliable)
-            if is_sae_run and hasattr(experiment, 'sae') and hasattr(experiment.sae, 'hidden_channels'):
-                 # This gives channels, not spatial dims. Need hook output.
-                 pass # Cannot reliably get spatial dims here before hook runs
-            elif not is_sae_run and hasattr(experiment, 'module'):
-                 # Try to get from module output shape (if module is conv layer)
-                 try:
-                      # Create dummy input matching observation shape
-                      dummy_input = torch.zeros(1, 3, env_h, env_w, device=experiment.device) # Assuming RGB input
-                      pass
-                 except Exception:
-                      pass
-            if act_h is None or act_w is None:
-                tqdm.write(f"  [Warning] Could not determine activation dims for layer '{layer_name if layer_name else layer_number}'. Using 1:1 mapping (likely incorrect).")
-                act_h, act_w = env_h, env_w # Fallback to 1:1
-
+        # Map layer names/numbers to their activation dimensions
+        if layer_name == 'input' or layer_number == 0:
+            act_h, act_w = 64, 64  # Input: 64×64×3
+        elif layer_name == 'conv1a' or layer_number == 2:
+            act_h, act_w = 64, 64  # After Conv Block 1: 32×32×16
+        elif layer_name == 'conv2a' or layer_number == 4:
+            act_h, act_w = 32, 32  # After Conv Block 2: 16×16×32
+        elif layer_name == 'conv2b' or layer_number == 5:
+            act_h, act_w = 32, 32  # After Conv Block 2: 16×16×32
+        elif layer_name == 'conv3a' or layer_number == 6:
+            act_h, act_w = 16, 16    # After Conv Block 3: 8×8×32
+        elif layer_name == 'conv4a' or layer_number == 8:
+            act_h, act_w = 8, 8    # After Conv Block 4: 4×4×32
 
         if act_h is not None and act_w is not None and act_h > 0 and act_w > 0:
             scale_y = env_h / act_h
@@ -337,7 +329,6 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         logged_reach_this_trial = False
 
         while not done and steps < max_steps:
-            # Collect frame if requested
             if collect_frames:
                 collected_frames.append(venv.render("rgb_array"))
 
