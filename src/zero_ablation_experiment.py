@@ -73,12 +73,18 @@ def parse_args():
     parser.add_argument("--required_entities", type=str, default="blue_key,green_key,red_key,gem",
                         help="Comma-separated list of entity names that MUST be present (e.g., 'blue_key,green_key,red_key,gem')")
     parser.add_argument("--zero_target_entity", type=str, required=True,
-                        help="The name of the entity whose corresponding channels will be zeroed (e.g., 'blue_key')")
-    parser.add_argument("--num_trials", type=int, default=10, help="Number of trials per channel")
-    parser.add_argument("--max_steps", type=int, default=250, # Increased default steps
+                        help="The name of the entity used for success criteria (e.g., 'blue_key') - determines which key *not* to collect.")
+    parser.add_argument("--num_trials", type=int, default=10, help="Number of trials per channel/group")
+    parser.add_argument("--max_steps", type=int, default=250,
                         help="Maximum steps per trial")
-    parser.add_argument("--start_channel", type=int, default=0, help="Starting channel index to zero")
-    # TODO: Add argument for specific channels list if needed later
+
+    # --- Ablation Specification Group ---
+    ablation_group = parser.add_mutually_exclusive_group(required=True)
+    ablation_group.add_argument("--start_channel", type=int, default=argparse.SUPPRESS, # Use SUPPRESS to check presence later
+                        help="Ablate channels/features individually, starting from this index (runs up to num_channels/features).")
+    ablation_group.add_argument("--ablation_groups", type=str, default=argparse.SUPPRESS,
+                        help="Ablate groups of channels/features simultaneously. Provide a JSON string representing a list of lists, e.g., '[[1, 5, 10], [22, 23], [4]]'.")
+    # --- End Ablation Specification Group ---
 
     # Output Config
     parser.add_argument("--output_dir", type=str, default="zero_ablation_results",
@@ -155,6 +161,35 @@ def parse_args():
 
     else: # Base model
         args.layer_name = args.layer_spec
+
+    # --- Process Ablation Specification ---
+    args.ablation_mode = None
+    args.indices_to_ablate = [] # Will store individual indices or groups (lists)
+
+    if hasattr(args, 'start_channel'):
+        args.ablation_mode = 'individual'
+        # We'll generate the individual indices later, after getting num_channels/features
+        print(f"Ablation Mode: Individual channels starting from index {args.start_channel}")
+    elif hasattr(args, 'ablation_groups'):
+        args.ablation_mode = 'group'
+        try:
+            parsed_groups = json.loads(args.ablation_groups)
+            if not isinstance(parsed_groups, list) or not all(isinstance(g, list) for g in parsed_groups):
+                raise ValueError("Input must be a list of lists.")
+            if not all(isinstance(i, int) for g in parsed_groups for i in g):
+                 raise ValueError("All elements within the inner lists must be integers.")
+            args.indices_to_ablate = parsed_groups
+            print(f"Ablation Mode: Group ablation with {len(args.indices_to_ablate)} groups: {args.indices_to_ablate}")
+            if not args.indices_to_ablate:
+                 parser.error("--ablation_groups cannot be an empty list '[]'.")
+        except json.JSONDecodeError:
+            parser.error("--ablation_groups must be a valid JSON string representing a list of lists.")
+        except ValueError as e:
+             parser.error(f"Invalid format for --ablation_groups: {e}")
+    else:
+        # Should not happen due to mutually_exclusive_group(required=True)
+        parser.error("Either --start_channel or --ablation_groups must be specified.")
+    # --- End Process Ablation Specification ---
 
     # --- End Argument Processing ---
 
@@ -399,19 +434,38 @@ def main():
         return # Exit if initialization fails
     # --- End Initialization ---
 
+    # --- Finalize Ablation Indices for 'individual' mode ---
+    if args.ablation_mode == 'individual':
+        if args.start_channel >= num_channels_or_features:
+             print(f"Error: --start_channel ({args.start_channel}) is >= number of channels/features ({num_channels_or_features}). No channels to ablate.")
+             args.indices_to_ablate = []
+        else:
+             # Generate list of individual indices to iterate through
+             args.indices_to_ablate = list(range(args.start_channel, num_channels_or_features))
+             print(f"Will ablate indices individually from {args.start_channel} to {num_channels_or_features - 1}")
+
+    if not args.indices_to_ablate:
+         print("No indices or groups specified for ablation. Exiting.")
+         return
+    # ---
 
     # --- Experiment Loop ---
-    total_simulations = (num_channels_or_features - args.start_channel) * args.num_trials
+    total_simulations = len(args.indices_to_ablate) * args.num_trials
     print(f"\nStarting experiment loops. Total simulations planned: {total_simulations}")
     experiment_count = 0
+    first_run_completed = False # Flag for debug GIF
 
-    channel_loop_desc = f"Channels/Features to Zero ({args.zero_target_entity_name}) [{args.start_channel}-{num_channels_or_features-1}]"
-    first_run_completed = False # Flag to save debug GIF only once
+    # Determine loop description based on mode
+    loop_desc = f"Ablation Groups ({args.zero_target_entity_name})" if args.ablation_mode == 'group' else f"Channels/Features ({args.zero_target_entity_name})"
 
-    for index_to_zero in tqdm(range(args.start_channel, num_channels_or_features), desc=channel_loop_desc):
+    # Iterate through individual indices OR groups of indices
+    for index_or_group in tqdm(args.indices_to_ablate, desc=loop_desc):
+        # Determine the list of indices to actually ablate for this iteration
+        current_ablation_list = index_or_group if args.ablation_mode == 'group' else [index_or_group]
+        group_str_repr = json.dumps(current_ablation_list) # For logging/results
 
-        # Loop over trials for the current channel/feature
-        trial_loop_desc = f"Trials (Idx {index_to_zero})"
+        # Loop over trials for the current channel/group
+        trial_loop_desc = f"Trials (Ablating: {group_str_repr})"
         for trial in tqdm(range(args.num_trials), desc=trial_loop_desc, leave=False):
             experiment_count += 1
             venv_trial = None
@@ -420,10 +474,10 @@ def main():
                 observations, venv_trial = create_multi_entity_no_locks_maze(args.required_entity_codes)
 
                 if venv_trial is None:
-                    tqdm.write(f"  Skipping trial {trial+1} for channel {index_to_zero} due to environment creation failure.")
+                    tqdm.write(f"  Skipping trial {trial+1} for channel {index_or_group} due to environment creation failure.")
                     results.append({
                         "layer_name": args.layer_name, "layer_is_sae": args.is_sae, "sae_layer_number": args.layer_number if args.is_sae else None,
-                        "channel_or_feature_zeroed": index_to_zero,
+                        "ablated_indices_group": group_str_repr, # Store the group
                         "trial": trial + 1,
                         "zero_target_entity_code": args.zero_target_entity_code,
                         "zero_target_entity_name": args.zero_target_entity_name,
@@ -438,30 +492,31 @@ def main():
                     continue
 
                 # --- Set the intervention for this specific trial ---
-                # We pass a list containing only the current index
+                # Pass the list of indices (current_ablation_list)
                 if args.is_sae:
-                    experiment.set_features_to_zero([index_to_zero]) # Registers the SAE hook
+                    experiment.set_features_to_zero(current_ablation_list)
                 else:
-                    experiment.set_channels_to_zero([index_to_zero]) # Registers the base model hook
+                    experiment.set_channels_to_zero(current_ablation_list)
                 # ---
 
                 # Run the simulation
                 trial_result = run_ablation_simulation(
-                    experiment=experiment, # Pass the experiment object
+                    experiment=experiment,
                     venv=venv_trial,
                     max_steps=args.max_steps,
                     zero_target_entity_code=args.zero_target_entity_code,
                     required_entity_codes=args.required_entity_codes,
-                    current_trial_number=trial + 1
+                    current_trial_number=trial + 1 # Pass trial number for context
                 )
 
                 # --- Save Debug GIF for the very first run ---
                 if not first_run_completed:
                     debug_observations = trial_result.get("observations", [])
                     if debug_observations:
+                        # Include group info in debug filename
                         debug_gif_filename = os.path.join(
                             gif_dir,
-                            f"debug_first_run_{args.layer_name}_{'sae' if args.is_sae else 'base'}_idx{index_to_zero}_trial{trial+1}.gif"
+                            f"debug_first_run_{args.layer_name}_{'sae' if args.is_sae else 'base'}_ablating{group_str_repr}_trial{trial+1}.gif"
                         )
                         try:
                             imageio.mimsave(debug_gif_filename, debug_observations, fps=10)
@@ -470,7 +525,7 @@ def main():
                             tqdm.write(f"  Warning: Failed to save DEBUG GIF for first run: {gif_e}")
                     else:
                          tqdm.write("  Warning: No observations found in first run result to save debug GIF.")
-                    first_run_completed = True # Ensure this only happens once
+                    first_run_completed = True
                 # --- End Save Debug GIF ---
 
                 # Calculate success for this trial
@@ -482,20 +537,19 @@ def main():
                 )
 
                 # --- Save GIF if successful ---
-                timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 if success:
                     observations_for_gif = trial_result.get("observations", [])
                     if observations_for_gif:
-                        # Construct filename
-                        gif_filename = os.path.join(
+                        # Include group info in success filename
+                        success_gif_filename = os.path.join(
                             gif_dir,
-                            f"success_{args.layer_name}_{'sae' if args.is_sae else 'base'}_idx{index_to_zero}_trial{trial+1}.gif"
+                            f"success_{args.layer_name}_{'sae' if args.is_sae else 'base'}_ablating{group_str_repr}_trial{trial+1}.gif"
                         )
                         try:
-                            imageio.mimsave(gif_filename, observations_for_gif, fps=10)
-                            tqdm.write(f"  Saved successful trajectory GIF: {gif_filename}")
+                            imageio.mimsave(success_gif_filename, observations_for_gif, fps=10)
+                            tqdm.write(f"  Saved successful trajectory GIF: {success_gif_filename}")
                         except Exception as gif_e:
-                            tqdm.write(f"  Warning: Failed to save GIF for successful trial {trial+1}, index {index_to_zero}: {gif_e}")
+                            tqdm.write(f"  Warning: Failed to save GIF for successful trial {trial+1}, group {group_str_repr}: {gif_e}")
                 # --- End Save GIF ---
 
                 # Record result
@@ -504,29 +558,29 @@ def main():
                     "layer_name": args.layer_name,
                     "layer_is_sae": args.is_sae,
                     "sae_layer_number": args.layer_number if args.is_sae else None,
-                    "channel_or_feature_zeroed": index_to_zero, # Use a clear column name
+                    "ablated_indices_group": group_str_repr, # Store the group JSON string
                     "trial": trial + 1,
                     "zero_target_entity_code": args.zero_target_entity_code,
                     "zero_target_entity_name": args.zero_target_entity_name,
-                    "required_entity_codes": json.dumps(args.required_entity_codes), # Save list as JSON string
+                    "required_entity_codes": json.dumps(args.required_entity_codes),
                     "other_required_key_codes": json.dumps(args.other_required_key_codes),
                     "outcome": trial_result.get("outcome", "error"),
                     "collected_entity_codes": json.dumps(trial_result.get("collected_entity_codes", [])),
-                    "zero_target_collected": trial_result.get("zero_target_collected", True), # Default to True if error
+                    "zero_target_collected": trial_result.get("zero_target_collected", True),
                     "all_other_keys_collected": trial_result.get("all_other_keys_collected", False),
                     "gem_collected": trial_result.get("gem_collected", False),
-                    "success": success, # Store the calculated success flag
+                    "success": success,
                     "final_player_pos_y": final_pos[0] if final_pos else -1,
                     "final_player_pos_x": final_pos[1] if final_pos else -1,
                 })
 
             except Exception as e:
-                 tqdm.write(f"\nRuntime Error during trial {trial+1} for channel {index_to_zero}: {e}")
+                 tqdm.write(f"\nRuntime Error during trial {trial+1} for channel {index_or_group}: {e}")
                  import traceback
                  traceback.print_exc() # Print full traceback for debugging
                  results.append({
                      "layer_name": args.layer_name, "layer_is_sae": args.is_sae, "sae_layer_number": args.layer_number if args.is_sae else None,
-                     "channel_or_feature_zeroed": index_to_zero, # Use a clear column name
+                     "ablated_indices_group": group_str_repr, # Store group
                      "trial": trial + 1,
                      "zero_target_entity_code": args.zero_target_entity_code,
                      "zero_target_entity_name": args.zero_target_entity_name,
@@ -538,9 +592,7 @@ def main():
                      "success": False,
                      "final_player_pos_y": -1, "final_player_pos_x": -1,
                  })
-                 # Also mark first run as completed if it errors out
-                 if not first_run_completed:
-                     first_run_completed = True
+                 if not first_run_completed: first_run_completed = True # Mark debug GIF done on error too
             finally:
                 # --- Crucially, disable intervention after each trial ---
                 if experiment is not None:
@@ -556,7 +608,7 @@ def main():
     results_df = pd.DataFrame(results)
     safe_layer_name = args.layer_name.replace('.', '_').replace('/', '_')
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_filename = os.path.join(args.output_dir, f"zero_ablation_results_{safe_layer_name}_{args.zero_target_entity_name}_{'sae' if args.is_sae else 'base'}_{timestamp_str}.csv")
+    csv_filename = os.path.join(args.output_dir, f"zero_ablation_results_{safe_layer_name}_{args.zero_target_entity_name}_{'sae' if args.is_sae else 'base'}_{args.ablation_mode}_{timestamp_str}.csv")
     results_df.to_csv(csv_filename, index=False)
     print(f"Results saved to {csv_filename}")
     # --- End Save Results ---
@@ -565,55 +617,52 @@ def main():
     # --- Visualize Results ---
     print("Generating visualizations...")
     if not results_df.empty:
-        # Calculate success rate per channel
-        # Exclude trials with errors before calculating rates
+        # Calculate success rate per group/channel
         valid_trials_df = results_df[~results_df['outcome'].str.contains('error', na=False)]
 
         if not valid_trials_df.empty:
-            success_counts = valid_trials_df[valid_trials_df['success']].groupby('channel_or_feature_zeroed').size()
-            total_valid_trials = valid_trials_df.groupby('channel_or_feature_zeroed').size()
-
-            # Ensure indices match before division, fill missing with 0
+            # Group by the 'ablated_indices_group' column
+            success_counts = valid_trials_df[valid_trials_df['success']].groupby('ablated_indices_group').size()
+            total_valid_trials = valid_trials_df.groupby('ablated_indices_group').size()
             success_counts_reindexed = success_counts.reindex(total_valid_trials.index, fill_value=0)
-
-            # Avoid division by zero
             success_rate = (success_counts_reindexed / total_valid_trials.replace(0, np.nan) * 100).fillna(0)
 
-            # Select top N channels based on success rate
-            num_to_visualize = min(args.num_top_channels_visualize, len(success_rate))
-            if num_to_visualize > 0:
-                 non_zero_success = success_rate[success_rate > 0]
-                 num_actual_visualize = min(num_to_visualize, len(non_zero_success))
-                 if num_actual_visualize > 0:
-                     top_channels = non_zero_success.nlargest(num_actual_visualize).index
+            # --- Visualization Update ---
+            # The previous bar plot showed top individual channels.
+            # For group ablation, plotting success rate per group might be more appropriate.
+            # We'll plot all groups if the number is reasonable, or top N otherwise.
+
+            num_groups_to_plot = len(success_rate)
+            plot_title_suffix = "All Groups"
+            if num_groups_to_plot > args.num_top_channels_visualize: # Reuse arg, though name is less fitting now
+                 num_groups_to_plot = args.num_top_channels_visualize
+                 plot_title_suffix = f"Top {num_groups_to_plot} Groups by Success Rate"
+
+            if num_groups_to_plot > 0:
+                 plot_data = success_rate.nlargest(num_groups_to_plot).sort_values(ascending=False)
+
+                 if not plot_data.empty:
+                     plt.style.use('seaborn-v0_8-darkgrid')
+                     fig, ax = plt.subplots(figsize=(max(10, len(plot_data)*0.6), 6)) # Adjust figsize based on number of groups
+                     plot_data.plot(kind='bar', ax=ax)
+                     ax.set_title(f"Zero-Ablation Success Rate (Target: {args.zero_target_entity_name})\nLayer: {args.layer_name} ({'SAE' if args.is_sae else 'Base'}) - {plot_title_suffix}")
+                     ax.set_xlabel("Ablated Indices Group (JSON String)")
+                     ax.set_ylabel("Success Rate (% of valid trials)")
+                     ax.set_ylim(0, 105)
+                     # Ensure x-ticks match the plotted data index (group strings)
+                     ax.set_xticks(range(len(plot_data)))
+                     ax.set_xticklabels(plot_data.index, rotation=45, ha='right', fontsize=8) # Adjust fontsize if needed
+                     plt.tight_layout()
+
+                     plot_filename = os.path.join(args.output_dir, f"zero_ablation_success_{safe_layer_name}_{args.zero_target_entity_name}_{'sae' if args.is_sae else 'base'}_{args.ablation_mode}_top{num_groups_to_plot}.png")
+                     plt.savefig(plot_filename)
+                     print(f"Success rate plot saved to {plot_filename}")
+                     plt.close(fig)
                  else:
-                     top_channels = pd.Index([])
-                     print("Skipping visualization: No channels had > 0% success rate among valid trials.")
+                      print("Skipping visualization: No groups had > 0% success rate among valid trials.")
             else:
-                 top_channels = pd.Index([])
-                 print("Skipping visualization: num_top_channels_visualize is 0 or less.")
-
-            if not top_channels.empty:
-                # Plotting (bar chart of success rate for top channels)
-                plt.style.use('seaborn-v0_8-darkgrid') # Or 'default'
-                fig, ax = plt.subplots(figsize=(max(10, len(top_channels)*0.5), 6))
-                plot_data = success_rate.loc[top_channels].sort_values(ascending=False)
-                plot_data.plot(kind='bar', ax=ax)
-                ax.set_title(f"Zero-Ablation Success Rate (Target: {args.zero_target_entity_name})\nLayer: {args.layer_name} ({'SAE' if args.is_sae else 'Base'}) - Top {len(top_channels)} Channels")
-                ax.set_xlabel("Channel/Feature Index Zeroed")
-                ax.set_ylabel("Success Rate (% of valid trials)")
-                ax.set_ylim(0, 105)
-                # Ensure x-ticks match the plotted data index
-                ax.set_xticks(range(len(plot_data)))
-                ax.set_xticklabels(plot_data.index, rotation=45, ha='right')
-                plt.tight_layout()
-
-                plot_filename = os.path.join(args.output_dir, f"zero_ablation_success_{args.layer_name}_{args.zero_target_entity_name}_{'sae' if args.is_sae else 'base'}_top{len(top_channels)}.png")
-                plt.savefig(plot_filename)
-                print(f"Success rate plot saved to {plot_filename}")
-                plt.close(fig)
-            else:
-                 print("Skipping visualization: No channels met criteria for plotting.")
+                 print("Skipping visualization: No groups to visualize.")
+            # --- End Visualization Update ---
         else:
              print("Skipping visualization: No valid (non-error) trials found in results.")
     else:

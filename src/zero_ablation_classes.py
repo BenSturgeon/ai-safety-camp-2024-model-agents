@@ -153,6 +153,11 @@ class SAEZeroAblationExperiment:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"SAEZeroAblation: Using device: {self.device}")
 
+        # --- Assign layer_name and layer_number EARLIER ---
+        self.layer_name = layer_name
+        self.layer_number = layer_number # Store for reference
+        # ---
+
         # Load Base Model
         print(f"SAEZeroAblation: Loading base model from {model_path}")
         self.model = helpers.load_interpretable_model(model_path=model_path).to(self.device)
@@ -164,17 +169,26 @@ class SAEZeroAblationExperiment:
             # Use the helper function to load the SAE
             self.sae = load_sae_from_checkpoint(sae_checkpoint_path).to(self.device)
             self.sae.eval() # Ensure SAE is in evaluation mode
-            sae_dim = self.get_num_features() # Get dimension after loading
-            if sae_dim is None:
-                 raise ValueError("Could not determine SAE dimension after loading.")
-            print(f"SAEZeroAblation: Loaded SAE with {sae_dim} features.")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load SAE using load_sae_from_checkpoint from {sae_checkpoint_path}: {e}")
 
-        self.layer_name = layer_name
-        self.layer_number = layer_number # Store for reference
+            # --- Get dimension AFTER loading AND setting self.layer_name ---
+            sae_dim = self.get_num_features() # Try to get dimension
+            # ---
+
+            if sae_dim is None:
+                 # If still None after trying hardcoded and dynamic, then raise error
+                 # Now self.layer_name is available for the error message
+                 raise ValueError(f"Could not determine SAE dimension for layer '{self.layer_name}' using hardcoded map or dynamic checks.")
+            print(f"SAEZeroAblation: Using SAE dimension: {sae_dim} for layer '{self.layer_name}'.")
+
+        except Exception as e:
+            # Add more context to the error message (self.layer_name is available here too)
+            raise RuntimeError(f"Failed during SAE loading or dimension check for layer '{self.layer_name}' from {sae_checkpoint_path}: {e}")
+
+        # self.layer_name = layer_name # <-- Moved earlier
+        # self.layer_number = layer_number # <-- Moved earlier
         self.module = self._get_module(self.layer_name) # Hook the base model layer
         if self.module is None:
+            # Use the already assigned self.layer_name
             raise ValueError(f"Base model layer '{self.layer_name}' not found.")
         print(f"SAEZeroAblation: Targeting base layer: {self.layer_name} for SAE intervention")
 
@@ -191,15 +205,40 @@ class SAEZeroAblationExperiment:
     def _sae_zeroing_hook(self, module, input, output):
         """
         Hook function placed on the base model layer.
-        It encodes the base layer's output, zeros specified SAE features,
-        decodes, and returns the reconstructed activations.
+        Aligned with sae_spatial_intervention.py patterns.
         """
         if self.features_to_zero is not None and len(self.features_to_zero) > 0:
             with torch.no_grad():
-                sae_features = self.sae.encode(output)
+                # --- Align with sae_spatial_intervention.py: Unpack tuple from SAE forward pass ---
+                # Assumes the forward pass returns (_, _, activations_tensor, _)
+                try:
+                    # Attempt unpacking assuming 4 elements, activations are 3rd
+                    _, _, sae_features, _ = self.sae(output)
+                    if not isinstance(sae_features, torch.Tensor):
+                         # Handle cases where tuple structure might differ or forward doesn't return tensor
+                         print(f"ERROR: SAE forward call did not return a tensor in the 3rd position. Got type: {type(sae_features)}")
+                         raise TypeError("Unexpected output format from SAE forward call.")
+                except (ValueError, TypeError) as e:
+                    print(f"ERROR: Failed to unpack expected tuple (e.g., _, _, acts, _) from self.sae(output). Error: {e}")
+                    print(f"DEBUG: Output type from self.sae(output): {type(self.sae(output))}")
+                    # Attempting to call forward might return different things based on SAE implementation
+                    # If it sometimes returns just the tensor, try that as a fallback.
+                    try:
+                        sae_features_alt = self.sae(output)
+                        if isinstance(sae_features_alt, torch.Tensor):
+                            print("DEBUG: Falling back to assuming self.sae(output) returns tensor directly.")
+                            sae_features = sae_features_alt
+                        else:
+                             raise AttributeError("SAE output is neither the expected tuple nor a direct tensor.")
+                    except Exception as fallback_e:
+                         print(f"ERROR: Fallback direct call self.sae(output) also failed or returned wrong type: {fallback_e}")
+                         # Raise the original error or a new one
+                         raise AttributeError(f"Cannot extract SAE features tensor from self.sae output. Original error: {e}")
+
+                # --- Now sae_features should be the correct tensor ---
                 modified_sae_features = sae_features.clone()
 
-                # --- Zero out specified features ---
+                # Zero out specified features (logic remains the same)
                 if sae_features.ndim >= 2:
                      num_actual_features = sae_features.shape[1]
                      valid_indices = [idx for idx in self.features_to_zero if 0 <= idx < num_actual_features]
@@ -207,13 +246,19 @@ class SAEZeroAblationExperiment:
                           print(f"Warning: Invalid SAE feature indices detected in {self.features_to_zero} for SAE with {num_actual_features} features. Using only valid indices: {valid_indices}")
 
                      if valid_indices:
-                          # Zero out the specified feature activations
                           modified_sae_features[:, valid_indices] = 0.0
                 else:
                      print(f"Warning: SAE feature tensor dimension ({sae_features.ndim}) not suitable for feature zeroing. Skipping.")
-                     modified_sae_features = sae_features # Use original if shape is wrong
+                     modified_sae_features = sae_features # Keep original if shape is wrong
 
-                reconstructed_activations = self.sae.decode(modified_sae_features)
+                # --- Align with sae_spatial_intervention.py: Use conv_dec for decoding ---
+                if hasattr(self.sae, 'conv_dec'):
+                    reconstructed_activations = self.sae.conv_dec(modified_sae_features)
+                else:
+                    print("ERROR: Loaded SAE object does not have a 'conv_dec' attribute for decoding.")
+                    raise AttributeError("Loaded SAE object does not have a 'conv_dec' attribute needed for decoding.")
+                # ---
+
                 return reconstructed_activations
         # If no features specified or hook inactive, return original output
         return output
@@ -253,22 +298,30 @@ class SAEZeroAblationExperiment:
         return self.module
 
     def get_num_features(self):
-        """Returns the number of features (dimensionality) of the loaded SAE."""
-        # Prioritize config attribute if it exists (common pattern)
-        if hasattr(self.sae, 'cfg') and hasattr(self.sae.cfg, 'd_sae'):
+        """
+        Returns the number of features (dimensionality) of the loaded SAE.
+        Uses dynamic checks, prioritizing 'hidden_channels'.
+        (Hardcoded map removed as per user edit).
+        """
+        # Dynamic checks (prioritizing hidden_channels)
+        if hasattr(self.sae, 'hidden_channels'):
+             print(f"DEBUG: Found dimension via self.sae.hidden_channels")
+             return self.sae.hidden_channels
+        elif hasattr(self.sae, 'cfg') and hasattr(self.sae.cfg, 'd_sae'):
+            print(f"DEBUG: Found dimension via self.sae.cfg.d_sae")
             return self.sae.cfg.d_sae
-        # Fallback to common attribute names
         elif hasattr(self.sae, 'sae_dim'):
+             print(f"DEBUG: Found dimension via self.sae.sae_dim")
              return self.sae.sae_dim
         elif hasattr(self.sae, 'd_sae'):
+             print(f"DEBUG: Found dimension via self.sae.d_sae")
              return self.sae.d_sae
-        # Fallback to inferring from weights (less reliable)
-        elif hasattr(self.sae, 'W_enc'):
-             # Shape is typically (activation_dim, sae_dim)
+        elif hasattr(self.sae, 'W_enc') and hasattr(self.sae.W_enc, 'shape') and len(self.sae.W_enc.shape) > 1:
+             print(f"DEBUG: Found dimension via self.sae.W_enc.shape[1]")
              return self.sae.W_enc.shape[1]
-        elif hasattr(self.sae, 'encoder') and hasattr(self.sae.encoder, 'weight'):
-             # Shape is typically (sae_dim, activation_dim) for nn.Linear
+        elif hasattr(self.sae, 'encoder') and hasattr(self.sae.encoder, 'weight') and hasattr(self.sae.encoder.weight, 'shape') and len(self.sae.encoder.weight.shape) > 0:
+             print(f"DEBUG: Found dimension via self.sae.encoder.weight.shape[0]")
              return self.sae.encoder.weight.shape[0]
         else:
-             print("Warning: Could not determine number of SAE features from known attributes (cfg.d_sae, sae_dim, d_sae, W_enc, encoder.weight).")
-             return None
+             print(f"Warning: Could not determine number of SAE features for layer '{self.layer_name}' using dynamic checks (hidden_channels, cfg.d_sae, sae_dim, d_sae, W_enc, encoder.weight).")
+             return None # Return None if all methods fail
