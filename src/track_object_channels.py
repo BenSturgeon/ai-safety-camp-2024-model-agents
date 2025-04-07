@@ -42,22 +42,53 @@ class EntityTrackingExperiment:
         self.handles = []
         self.all_activations = {}
         
-    def load_sae(self, layer_number, step=150000000):
-        """Load an SAE for a specific layer"""
-        layer_name = self.target_layers[layer_number]
-        checkpoint_path = f"checkpoints/layer_{layer_number}_{layer_name}/sae_checkpoint_step_{step}.pt"
-        
-        if not os.path.exists(checkpoint_path):
-            print(f"Warning: SAE checkpoint not found at {checkpoint_path}")
+    def load_sae(self, layer_number, sae_checkpoint_path=None, sae_step=15000000):
+        """
+        Load an SAE for a specific layer. Prioritizes sae_checkpoint_path if provided.
+
+        Args:
+            layer_number (int): The layer number to load the SAE for.
+            sae_checkpoint_path (str, optional): Direct path to the SAE checkpoint file.
+            sae_step (int, optional): Step number to use if path is not provided.
+        """
+        layer_name = self.target_layers.get(layer_number)
+        if not layer_name:
+            print(f"Error: Invalid layer number {layer_number} provided to load_sae.")
             return False
-        
-        print(f"Loading SAE for layer {layer_name} from {checkpoint_path}")
-        try:
-            sae = load_sae_from_checkpoint(checkpoint_path).to(self.device)
-            self.saes[layer_number] = sae
-            return True
-        except Exception as e:
-            print(f"Error loading SAE: {e}")
+
+        checkpoint_path_to_load = None
+
+        # --- Prioritize the provided path ---
+        if sae_checkpoint_path:
+            if os.path.exists(sae_checkpoint_path):
+                checkpoint_path_to_load = sae_checkpoint_path
+                print(f"Using provided SAE checkpoint path: {checkpoint_path_to_load}")
+            else:
+                print(f"Error: Provided SAE checkpoint path not found: {sae_checkpoint_path}")
+                return False
+        # --- Fallback to step-based path construction ---
+        else:
+            constructed_path = f"checkpoints/layer_{layer_number}_{layer_name}/sae_checkpoint_step_{sae_step}.pt"
+            if os.path.exists(constructed_path):
+                checkpoint_path_to_load = constructed_path
+                print(f"Using constructed SAE checkpoint path (step {sae_step}): {checkpoint_path_to_load}")
+            else:
+                # Don't print warning here, let the calling function handle missing files if needed
+                pass # Path doesn't exist, will return False later
+
+        # --- Load if a valid path was determined ---
+        if checkpoint_path_to_load:
+            print(f"Loading SAE for layer {layer_name} from {checkpoint_path_to_load}")
+            try:
+                sae = load_sae_from_checkpoint(checkpoint_path_to_load).to(self.device)
+                self.saes[layer_number] = sae
+                return True
+            except Exception as e:
+                print(f"Error loading SAE from {checkpoint_path_to_load}: {e}")
+                return False
+        else:
+            # If neither provided path worked nor constructed path exists
+            print(f"Warning: No valid SAE checkpoint found for layer {layer_name} (path: {sae_checkpoint_path}, step: {sae_step})")
             return False
     
     def _get_module(self, model, layer_name):
@@ -887,10 +918,23 @@ def parse_args():
                         help="Secondary entity code (optional)")
     parser.add_argument("--output", type=str, default="entity_tracking_results",
                         help="Directory to save results")
+    parser.add_argument("--sae_checkpoint_path", type=str, default=None,
+                        help="Optional: Full path to a specific SAE checkpoint file to use. Overrides --sae_step.")
+    parser.add_argument("--layer_number_for_sae", type=int, default=None,
+                        help="Layer number corresponding to the --sae_checkpoint_path (required if path is set).")
     parser.add_argument("--sae_step", type=int, default=15000000,
-                        help="Step number for SAE checkpoints (default: 15000000)")
+                        help="Step number for SAE checkpoints (default: 15000000). Ignored if --sae_checkpoint_path is set.")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # --- Add validation ---
+    if args.sae_checkpoint_path and args.layer_number_for_sae is None:
+        parser.error("--layer_number_for_sae is required when using --sae_checkpoint_path")
+    if not args.sae_checkpoint_path and args.layer_number_for_sae is not None:
+        print("Warning: --layer_number_for_sae is ignored when --sae_checkpoint_path is not set.")
+    # --- End validation ---
+
+    return args
 
 def main():
     args = parse_args()
@@ -927,52 +971,76 @@ def main():
     print("-" * 80)
     
     experiment = EntityTrackingExperiment(model_path=args.model_path)
-    
-    print("Loading SAE models for each layer:")
-    loaded_layers = []
-    sae_steps_to_try = [args.sae_step, 3000000, 5000000, 500000]
-    
-    for layer_number in experiment.target_layers:
-        layer_name = experiment.target_layers[layer_number]
-        print(f"  - Attempting to load layer {layer_number} ({layer_name})...")
-        
-        success = False
-        for step in sae_steps_to_try:
-            success = experiment.load_sae(layer_number, step=step)
-            if success:
-                print(f"    Successfully loaded SAE for {layer_name} with step {step}")
-                break
-        
-        if not success and layer_name == "conv4a":
-            print(f"    Trying alternate SAE versions for {layer_name}...")
-            for channels in [32, 16, 8]:
-                custom_path = f"checkpoints/layer_{layer_number}_{layer_name}_{channels}ch/sae_checkpoint_step_{args.sae_step}.pt"
-                if os.path.exists(custom_path):
-                    try:
-                        print(f"    Found custom SAE at {custom_path}")
-                        experiment.saes[layer_number] = load_sae_from_checkpoint(custom_path).to(experiment.device)
-                        success = True
-                        break
-                    except Exception as e:
-                        print(f"    Error loading custom SAE: {e}")
-        
-        if success:
-            loaded_layers.append(layer_name)
-    
-    if not loaded_layers:
-        print("ERROR: No SAE models could be loaded. Make sure the checkpoints exist.")
+
+    print("Loading SAE models:")
+    loaded_layers_nums = [] # Store layer numbers that were loaded
+
+    # --- Adjust SAE loading logic ---
+    if args.sae_checkpoint_path:
+        # If a specific path is given, load only that layer
+        print(f"Attempting to load specified SAE checkpoint for layer {args.layer_number_for_sae}: {args.sae_checkpoint_path}")
+
+        # Check if the specified layer number is valid according to the experiment's initial setup
+        if args.layer_number_for_sae not in experiment.target_layers:
+             print(f"Error: Provided layer number {args.layer_number_for_sae} is not in the initially defined target layers: {list(experiment.target_layers.keys())}")
+        else:
+             # Attempt to load the specified SAE
+             if experiment.load_sae(args.layer_number_for_sae, sae_checkpoint_path=args.sae_checkpoint_path):
+                  loaded_layers_nums.append(args.layer_number_for_sae)
+                  # --- Crucially, modify the experiment to only target this loaded layer ---
+                  target_layer_name = experiment.target_layers[args.layer_number_for_sae]
+                  experiment.target_layers = {args.layer_number_for_sae: target_layer_name}
+                  print(f"Successfully loaded. Experiment will now ONLY target layer {args.layer_number_for_sae} ({target_layer_name}).")
+                  # ---
+             else:
+                  # load_sae already prints errors/warnings
+                  pass # Loading failed
+
+    else:
+        # Original logic: Try multiple steps for all target layers if a specific path isn't given
+        sae_steps_to_try = [args.sae_step, 1000000, 5000000, 500000] # Example steps
+        print(f"No specific SAE path provided. Trying steps {sae_steps_to_try} for layers: {list(experiment.target_layers.keys())}")
+
+        initial_target_layers = list(experiment.target_layers.keys()) # Copy keys before potential modification
+        for layer_num in initial_target_layers:
+            layer_name = experiment.target_layers[layer_num]
+            print(f"  - Attempting to load layer {layer_num} ({layer_name})...")
+            loaded_successfully = False
+            for step in sae_steps_to_try:
+                # Pass None for path, so it uses the step
+                if experiment.load_sae(layer_num, sae_checkpoint_path=None, sae_step=step):
+                    loaded_layers_nums.append(layer_num)
+                    loaded_successfully = True
+                    print(f"    Successfully loaded SAE for {layer_name} with step {step}")
+                    break # Stop trying steps for this layer once loaded
+            if not loaded_successfully:
+                 print(f"    Could not load SAE for layer {layer_num} ({layer_name}) using any of the specified steps.")
+                 # Optionally remove the layer from target_layers if it couldn't be loaded
+                 # del experiment.target_layers[layer_num]
+    # --- End Adjust SAE loading logic ---
+
+
+    if not loaded_layers_nums: # Check if the list is empty
+        print("\nError: No SAE models could be loaded. Exiting.")
         return
-    
-    print(f"Successfully loaded {len(loaded_layers)} SAE models: {', '.join(loaded_layers)}")
+
+    # Use the potentially modified experiment.target_layers to report loaded layers
+    loaded_layer_names = [experiment.target_layers[num] for num in loaded_layers_nums]
+    print(f"\nSuccessfully loaded SAEs for layers: {loaded_layer_names} (Numbers: {loaded_layers_nums})")
+    print(f"Experiment will analyze these layers: {list(experiment.target_layers.values())}")
     print("-" * 80)
-    
-    print(f"Running experiment tracking the {entity_desc_display} (code {args.entity1_code})")
+
+    # --- The rest of the script now uses the potentially filtered experiment.target_layers ---
+    print(f"Registering hooks for loaded layers...")
+    experiment.register_hooks() # Will only register for layers remaining in experiment.target_layers and experiment.saes
+
+    print(f"\nRunning simulation tracking the {entity_desc_display} (code {args.entity1_code})...")
     results = experiment.run_entity_tracking_experiment(
         entity1_code=args.entity1_code,
         entity2_code=args.entity2_code,
         output_path=args.output
     )
-    
+
     print("\n" + "=" * 80)
     print(f"RESULTS SUMMARY FOR {entity_desc_display.upper()}")
     print("=" * 80)
