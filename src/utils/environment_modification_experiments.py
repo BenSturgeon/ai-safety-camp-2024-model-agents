@@ -4,6 +4,7 @@ import random
 import numpy as np
 import imageio
 import torch
+from procgen.gym_registration import make_env
 
 ENTITY_COLORS = {"blue": 0, "green": 1, "red": 2}
 
@@ -41,6 +42,16 @@ ordered_layer_names = {
     15: "dropout_fc",
 }
 
+# Add this new constant dictionary if it's not already there
+ENTITY_CODE_DESCRIPTION = {
+    3: "gem",
+    4: "blue_key",
+    5: "green_key",
+    6: "red_key",
+    7: "blue_lock",
+    8: "green_lock",
+    9: "red_lock"
+}
 
 def create_corridor_environment(entity_one, entity_two, corridor_length=9):
     # Keep recreating the environment until we find one with a red key
@@ -1907,3 +1918,51 @@ def run_example_complete_maze_sequence(save_path="complete_maze_example", render
         render_as_gif=render_as_gif,
         fps=2
     )
+
+def create_multi_entity_no_locks_maze(required_entity_codes, start_level_seed=None):
+    """
+    Creates a Procgen Heist environment ensuring specific entities are present
+    and removing all lock entities. Loops indefinitely until a suitable level is found.
+
+    Args:
+        required_entity_codes (list[int]): A list of entity codes (3-9) that
+                                           must be present in the generated level.
+                                           Should typically include keys and the gem.
+        start_level_seed (int, optional): Specific seed to start level generation.
+                                          If None, uses random seeds.
+
+    Returns:
+        tuple: (initial_observation, venv)
+    """
+    required_entity_names = [ENTITY_CODE_DESCRIPTION.get(c, str(c)) for c in required_entity_codes]
+
+    while True: 
+
+        venv_temp = heist.create_venv(
+        num=1, start_level=random.randint(1000, 10000), num_levels=0)
+        state = heist.state_from_venv(venv_temp, 0)
+
+        if not state.entity_exists(ENTITY_TYPES["key"], ENTITY_COLORS["red"]):
+            venv_temp.close()
+        else: 
+            break
+
+    # Found a level with all required entities
+
+    state.delete_locks()
+
+
+    # Apply the state changes
+    state_bytes = state.state_bytes
+    if state_bytes is not None:
+        venv_temp.env.callmethod("set_state", [state_bytes])
+        initial_observation = venv_temp.reset()
+
+        return initial_observation, venv_temp
+    else:
+        print("  Warning: Failed to get state_bytes after removing locks. Trying new seed.")
+        venv_temp.close()
+        venv_temp = None
+
+
+
