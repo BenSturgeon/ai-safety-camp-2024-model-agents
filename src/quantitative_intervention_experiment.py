@@ -6,15 +6,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import random
-import imageio # Needed by environment?
-import glob # For finding checkpoints
-import re # For parsing step count from filenames
-from tqdm import tqdm # Import tqdm
+import imageio
+import glob
+import re
+from tqdm import tqdm
+import datetime
 
 # Procgen environment
 from procgen import ProcgenEnv
 from procgen.gym_registration import make_env
-from utils import heist # Import heist itself
+from utils import heist
 
 # Project imports
 from base_model_intervention import BaseModelInterventionExperiment
@@ -34,15 +35,12 @@ ENTITY_CODE_DESCRIPTION = {
 }
 ENTITY_DESCRIPTION_CODE = {v: k for k, v in ENTITY_CODE_DESCRIPTION.items()}
 
-# Based on the box_maze pattern in environment_modification_experiments.py
-PLAYER_START_PATTERN_POS = (6, 3)
-
-DEFAULT_ALT_ENTITY_CODE = ENTITY_DESCRIPTION_CODE["green_key"] # 5
-DEFAULT_MAIN_ENTITY_CODE = ENTITY_DESCRIPTION_CODE["blue_key"] # 4
-
 # Default locations
 DEFAULT_MODEL_BASE_DIR = "models"
 DEFAULT_SAE_CHECKPOINT_DIR = "checkpoints"
+
+# Log header for intervention reach events
+INTERVENTION_REACHED_LOG_HEADER = "Timestamp,Trial,Step,Channel,InterventionValue,TargetEntityName,ActivationPosY,ActivationPosX,TargetEnvPosY,TargetEnvPosX\n"
 
 def find_latest_checkpoint(layer_number, layer_name, base_dir=DEFAULT_SAE_CHECKPOINT_DIR):
     """Finds the latest SAE checkpoint for a given layer based on step count."""
@@ -140,8 +138,6 @@ def parse_args():
                         help="Comma-separated list of entity names to target (e.g., 'gem,blue_key')")
     parser.add_argument("--num_trials", type=int, default=10,
                         help="Number of trials per channel")
-    parser.add_argument("--calibration_factor", type=float, default=2.0,
-                        help="Factor to multiply max activation by for intervention strength (ignored if calibration skipped)")
     parser.add_argument("--max_steps", type=int, default=50,
                         help="Maximum number of steps per trial simulation")
     parser.add_argument("--intervention_position", type=str, default="2,1",
@@ -150,8 +146,10 @@ def parse_args():
                         help="Radius for the intervention patch (0 for single point)")
     parser.add_argument("--start_channel", type=int, default=0,
                         help="Starting channel index for the experiment loop (default: 0)")
-    parser.add_argument("--intervention_value", type=float, default=3.0,
-                        help="Fixed value to use for the intervention (default: 3.0)")
+
+    # Modified Intervention Value Argument
+    parser.add_argument("--intervention_value", type=str, default="3.0",
+                        help="Intervention value. Either a fixed float (e.g., '3.0') or a range 'min,max' (e.g., '0.2,2.0') to iterate over trials.")
 
     # Output Configuration
     parser.add_argument("--output_dir", type=str, default="quantitative_intervention_results",
@@ -175,10 +173,39 @@ def parse_args():
     except Exception as e:
         parser.error(f"Invalid format for --intervention_position '{args.intervention_position}'. Use 'y,x' format (e.g., '2,1'). Error: {e}")
 
+    # Parse intervention value (new logic)
+    args.intervention_is_range = False
+    args.intervention_min = None
+    args.intervention_max = None
+    args.intervention_fixed_value = None
+
+    if ',' in args.intervention_value:
+        try:
+            parts = args.intervention_value.split(',')
+            if len(parts) != 2:
+                raise ValueError("Range must have exactly two parts separated by a comma.")
+            min_val = float(parts[0].strip())
+            max_val = float(parts[1].strip())
+            if min_val >= max_val:
+                raise ValueError(f"Minimum value ({min_val}) must be less than maximum value ({max_val}).")
+            args.intervention_min = min_val
+            args.intervention_max = max_val
+            args.intervention_is_range = True
+            print(f"Using intervention value range: {args.intervention_min} to {args.intervention_max}")
+        except ValueError as e:
+            parser.error(f"Invalid format for --intervention_value range '{args.intervention_value}'. Use 'min,max' format (e.g., '0.2,2.0'). Error: {e}")
+    else:
+        try:
+            args.intervention_fixed_value = float(args.intervention_value)
+            args.intervention_is_range = False
+            print(f"Using fixed intervention value: {args.intervention_fixed_value}")
+        except ValueError:
+            parser.error(f"Invalid format for --intervention_value '{args.intervention_value}'. Must be a float or 'min,max' range.")
+
     return args
 
 
-def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, intervention_position, intervention_config=None, collect_activations_for_channel=None, collect_frames=False):
+def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, intervention_position, intervention_config=None, collect_frames=False, intervention_reached_log_path=None, current_channel_index=None, current_intervention_value=None, current_trial_number=None, target_entity_name=None):
     """
     Runs a single simulation episode, optionally applying an intervention and/or collecting activations/frames.
 
@@ -190,19 +217,22 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         is_sae_run (bool): Flag indicating whether the run is for an SAE layer.
         intervention_position (tuple): (y, x) position for intervention checks in *activation* coordinates.
         intervention_config (list, optional): Intervention configuration for experiment.set_intervention().
-        collect_activations_for_channel (int, optional): If set, collect activations for this specific channel.
         collect_frames (bool): If True, collect rendered frames.
+        intervention_reached_log_path (str, optional): Path to the log file for intervention reach events.
+        current_channel_index (int, optional): The current channel index being tested.
+        current_intervention_value (float, optional): The intervention value used in this trial.
+        current_trial_number (int, optional): The current trial number for this channel/entity.
+        target_entity_name (str, optional): The name of the target entity.
 
     Returns:
         dict: Contains 'final_player_pos', 'outcome', 'target_acquired', 'initial_target_pos'
-              and optionally 'activations' and 'frames'.
+              and optionally 'frames'.
     """
     observation = venv.reset()
     done = False
     steps = 0
-    collected_channel_activations = [] if collect_activations_for_channel is not None else None
     collected_frames = [] if collect_frames else None
-    handle = None # Initialize handle
+    handle = None
 
     try:
         # Register Hook
@@ -233,7 +263,6 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
 
         # Get actual entity positions from the state *after* reset
         state = heist.state_from_venv(venv, 0)
-        # Use the mouse_pos property
         player_pos = state.mouse_pos # (y, x)
         if player_pos is None:
             tqdm.write(f"\nWarning: Could not retrieve initial player position using state.mouse_pos: returned None")
@@ -257,7 +286,7 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         except ValueError as e:
              print(f"\nError: {e}")
              # Handle error appropriately - maybe skip trial or return error state
-             return {"outcome": "error_entity_mapping", "final_player_pos": None, "activations": None, "initial_target_pos": None, "target_acquired": False, "frames": None}
+             return {"outcome": "error_entity_mapping", "final_player_pos": None, "initial_target_pos": None, "target_acquired": False, "frames": None}
 
         # Find entity positions using type and color/theme
         initial_target_pos = state.get_entity_position(target_type, target_color)
@@ -270,7 +299,7 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
 
         # Coordinate Scaling Logic
         act_h, act_w = None, None
-        env_h, env_w = state.world_dim, state.world_dim # Assuming square environment grid
+        env_h, env_w = state.world_dim, state.world_dim
         target_env_pos = None
         layer_name = getattr(experiment, 'layer_name', None)
         layer_number = getattr(experiment, 'layer_number', None)
@@ -279,7 +308,6 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
             act_h, act_w = 8, 8
         elif layer_number == 6 or layer_name == 'conv3a':
             act_h, act_w = 16, 16
-        # Add more layers here if needed
         else:
              # Attempt to infer from first activation if available (less reliable)
             if is_sae_run and hasattr(experiment, 'sae') and hasattr(experiment.sae, 'hidden_channels'):
@@ -290,8 +318,6 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
                  try:
                       # Create dummy input matching observation shape
                       dummy_input = torch.zeros(1, 3, env_h, env_w, device=experiment.device) # Assuming RGB input
-                      # Pass through relevant part of model up to target layer
-                      # This is complex, skipping for now. Need activation shape from hook.
                       pass
                  except Exception:
                       pass
@@ -300,17 +326,18 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
                 act_h, act_w = env_h, env_w # Fallback to 1:1
 
 
-        if act_h is not None and act_w is not None and act_h > 0 and act_w > 0: # Ensure non-zero dimensions
+        if act_h is not None and act_w is not None and act_h > 0 and act_w > 0:
             scale_y = env_h / act_h
             scale_x = env_w / act_w
             target_env_pos = (int(intervention_position[0] * scale_y), int(intervention_position[1] * scale_x))
         else:
             target_env_pos = None # Ensure it's None if scaling failed
 
-        reached_target_area = False # Flag to track if target area was ever reached
+        reached_target_area = False
+        logged_reach_this_trial = False
 
         while not done and steps < max_steps:
-            # Collect frame if requested BEFORE taking step
+            # Collect frame if requested
             if collect_frames:
                 collected_frames.append(venv.render("rgb_array"))
 
@@ -319,36 +346,15 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
                  obs_np = observation[0]['rgb']
             elif isinstance(observation, dict):
                  obs_np = observation['rgb']
-            elif isinstance(observation, np.ndarray): # Handle case where obs is directly the array
+            elif isinstance(observation, np.ndarray):
                 obs_np = observation
             else:
                  raise TypeError(f"Unexpected observation format: {type(observation)}")
-
-            # Print Env/Obs Shape on first step
-            if steps == 0:
-                tqdm.write(f"  [Sim Debug] Observation shape (obs_np): {obs_np.shape}")
 
             obs_tensor = torch.tensor(helpers.observation_to_rgb(obs_np), dtype=torch.float32).to(experiment.device)
 
             with torch.no_grad():
                 outputs = experiment.model(obs_tensor)
-
-            # Activation Collection
-            if collect_activations_for_channel is not None:
-                activation_source = None
-                if is_sae_run:
-                    if hasattr(experiment, 'sae_activations') and experiment.sae_activations:
-                        activation_source = experiment.sae_activations
-                else:
-                     if hasattr(experiment, 'original_activations') and experiment.original_activations:
-                          activation_source = experiment.original_activations
-
-                if activation_source:
-                    if isinstance(activation_source, list) and activation_source:
-                        last_step_acts = activation_source[-1]
-                        if isinstance(last_step_acts, torch.Tensor) and last_step_acts.ndim == 3 and last_step_acts.shape[0] > collect_activations_for_channel:
-                            channel_act = last_step_acts[collect_activations_for_channel].clone()
-                            collected_channel_activations.append(channel_act)
 
             # Get action
             if hasattr(outputs, 'logits'):
@@ -373,13 +379,35 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
 
             # Check if agent reached target area
             if not reached_target_area and target_env_pos is not None:
-                current_state = heist.state_from_venv(venv, 0) # Get current state
+                current_state = heist.state_from_venv(venv, 0)
                 current_player_pos = current_state.mouse_pos
                 if current_player_pos and not (np.isnan(current_player_pos[0]) or np.isnan(current_player_pos[1])):
                     current_player_grid_pos = (int(current_player_pos[0]), int(current_player_pos[1]))
                     if current_player_grid_pos == target_env_pos:
                         reached_target_area = True
-                        tqdm.write(f"  [Debug] Agent reached target environment position {target_env_pos} at step {steps}")
+
+
+                        # Log the first time the agent reaches the target environment cell in this trial
+                        if intervention_reached_log_path and not logged_reach_this_trial:
+                            try:
+                                timestamp = datetime.datetime.now().isoformat()
+                                log_entry = (
+                                    f"{timestamp},"
+                                    f"{current_trial_number if current_trial_number is not None else 'N/A'},"
+                                    f"{steps},"
+                                    f"{current_channel_index if current_channel_index is not None else 'N/A'},"
+                                    f"{current_intervention_value if current_intervention_value is not None else 'N/A'},"
+                                    f"{target_entity_name if target_entity_name else 'N/A'},"
+                                    f"{intervention_position[0]},"
+                                    f"{intervention_position[1]},"
+                                    f"{target_env_pos[0]},"
+                                    f"{target_env_pos[1]}\n"
+                                )
+                                with open(intervention_reached_log_path, 'a') as log_f:
+                                    log_f.write(log_entry)
+                                logged_reach_this_trial = True
+                            except Exception as e_log:
+                                tqdm.write(f"  [Warning] Failed to write to intervention reach log '{intervention_reached_log_path}': {e_log}")
 
         # Collect final frame if requested
         if collect_frames:
@@ -390,26 +418,17 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
 
         # Get final player position (float and grid cell)
         final_player_pos = None
-        final_player_grid_pos = None
+
         final_player_pos = final_state.mouse_pos # (y, x)
-        if final_player_pos:
-             # Re-introduce NaN check
-             if np.isnan(final_player_pos[0]) or np.isnan(final_player_pos[1]):
-                  tqdm.write(f"  Warning: Final player position contains NaN {final_player_pos}. Setting grid pos to None.")
-                  final_player_grid_pos = None
-             else:
-                  final_player_grid_pos = (int(final_player_pos[0]), int(final_player_pos[1]))
-        else:
-             tqdm.write(f"  Warning: final_state.mouse_pos returned None.")
-             final_player_grid_pos = None # Ensure grid pos is None if float pos is None
+
 
         # Check if target entity was acquired
         final_target_pos = final_state.get_entity_position(target_type, target_color)
         target_acquired = (initial_target_pos is not None) and (final_target_pos is None)
 
-        # Determine outcome based on whether the target area was ever reached
+        # Determine outcome
         outcome = 'other'
-        if reached_target_area: # Check if flag was set during the loop
+        if reached_target_area:
              outcome = 'intervention_location'
 
         # Clean up intervention state
@@ -418,10 +437,9 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         return {
             "final_player_pos": final_player_pos,
             "outcome": outcome,
-            "activations": collected_channel_activations,
             "initial_target_pos": initial_target_pos,
             "target_acquired": target_acquired,
-            "frames": collected_frames # Return collected frames
+            "frames": collected_frames
         }
 
     finally:
@@ -503,7 +521,7 @@ def main():
         print(f"Targeting base model layer: {layer_name}")
         experiment_class = BaseModelInterventionExperiment
         init_kwargs = {
-            "model_path": model_path, # Use determined model path
+            "model_path": model_path,
             "target_layer": layer_name,
             "device": device
         }
@@ -537,11 +555,34 @@ def main():
     # Experiment Loop
     total_experiments = len(args.target_entities) * (num_channels - args.start_channel) * args.num_trials
     print(f"\nStarting experiment loops. Total simulations planned: {total_experiments}")
-    experiment_count = 0
     first_trial_debug_gif_saved = False
 
     # Initialize experiment object once
     experiment = experiment_class(**init_kwargs)
+
+    # --- Intervention Reach Log Setup ---
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
+
+    # Determine intervention value string for filename
+    if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
+        value_str = f"range{args.intervention_min}-{args.intervention_max}"
+    elif hasattr(args, 'intervention_fixed_value'):
+        value_str = f"fixed{args.intervention_fixed_value}"
+    else:
+        value_str = f"val{args.intervention_value}"
+
+    intervention_log_filename = os.path.join(args.output_dir, f"intervention_reached_log_{safe_layer_name}_{value_str}_{timestamp_str}.csv")
+    intervention_log_enabled = False
+    try:
+        with open(intervention_log_filename, 'w') as f_log:
+            f_log.write(INTERVENTION_REACHED_LOG_HEADER)
+        intervention_log_enabled = True
+        print(f"Intervention reach events will be logged to: {intervention_log_filename}")
+    except Exception as e_log_init:
+        print(f"Warning: Could not create intervention reach log file '{intervention_log_filename}'. Logging disabled. Error: {e_log_init}")
+        intervention_log_filename = None
+    # --- End Log Setup ---
 
     # Outer loop over target entities
     for target_entity_code in tqdm(args.target_entities, desc="Target Entities"):
@@ -555,13 +596,24 @@ def main():
         channel_loop_desc = f"Channels ({target_entity_name}) [{args.start_channel}-{num_channels-1}]"
         for channel_index in tqdm(range(args.start_channel, num_channels), desc=channel_loop_desc, leave=False):
 
-            # Use fixed intervention value from args (calibration is skipped)
-            intervention_value = args.intervention_value
-            max_activation = np.nan
-
             # Intervention Trials Loop
             for trial in range(args.num_trials):
-                experiment_count += 1
+
+                # --- Determine Intervention Value ---
+                intervention_value = None
+                if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
+                    if args.num_trials > 1:
+                        step_size = (args.intervention_max - args.intervention_min) / (args.num_trials - 1)
+                        intervention_value = args.intervention_min + trial * step_size
+                    else: # Handle edge case of only 1 trial
+                        intervention_value = (args.intervention_min + args.intervention_max) / 2.0
+                elif hasattr(args, 'intervention_fixed_value'):
+                     intervention_value = args.intervention_fixed_value
+                else:
+                    # Fallback
+                    tqdm.write("[Warning] Could not determine intervention range/fixed value, using raw --intervention_value.")
+                    intervention_value = args.intervention_value
+                # --- End Intervention Value Determination ---
 
                 # Determine if this is the very first trial overall (for saving GIF)
                 is_first_trial_for_gif = (
@@ -573,7 +625,7 @@ def main():
 
                 intervention_config = [{
                     "channel": channel_index,
-                    "position": args.intervention_position, # Use position from args (activation coords)
+                    "position": args.intervention_position,
                     "value": intervention_value,
                     "radius": args.intervention_radius,
                 }]
@@ -587,17 +639,22 @@ def main():
                     max_steps=args.max_steps,
                     target_entity_code=target_entity_code,
                     is_sae_run=args.is_sae,
-                    intervention_position=args.intervention_position, # Pass activation coords
+                    intervention_position=args.intervention_position,
                     intervention_config=intervention_config,
-                    collect_activations_for_channel=None,
-                    collect_frames=is_first_trial_for_gif # Collect frames only for first trial
+                    collect_frames=is_first_trial_for_gif,
+                    # Logging info
+                    intervention_reached_log_path=intervention_log_filename,
+                    current_channel_index=channel_index,
+                    current_intervention_value=intervention_value,
+                    current_trial_number=trial + 1,
+                    target_entity_name=target_entity_name
                 )
 
                 # Keep finally block to close the environment
-                try: # Add a minimal try block just for the finally clause
-                    pass # No operation needed here
+                try:
+                    pass
                 finally:
-                     # Ensure venv_trial exists before trying to close
+                     # Ensure venv_trial exists before closing
                      if venv_trial is not None:
                          venv_trial.close()
 
@@ -605,10 +662,14 @@ def main():
                 if is_first_trial_for_gif and trial_result.get("frames"):
                     try:
                          safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
-                         gif_filename = os.path.join(args.output_dir, f"debug_gif_{safe_layer_name}_{target_entity_name}_ch{channel_index}_trial{trial+1}_pos{args.intervention_position[0]}_{args.intervention_position[1]}.gif") # Add pos to filename
+                         # Entity-specific directory
+                         debug_gif_dir = os.path.join(args.output_dir, safe_layer_name, target_entity_name)
+                         os.makedirs(debug_gif_dir, exist_ok=True)
+                         # Construct filename
+                         gif_filename = os.path.join(debug_gif_dir, f"debug_gif_ch{channel_index}_trial{trial+1}_pos{args.intervention_position[0]}_{args.intervention_position[1]}.gif")
                          imageio.mimsave(gif_filename, trial_result["frames"], fps=10)
                          tqdm.write(f"    Saved debug GIF for first trial to {gif_filename}")
-                         first_trial_debug_gif_saved = True # Set flag so we don't save again
+                         first_trial_debug_gif_saved = True
                     except Exception as e_gif:
                          tqdm.write(f"    Error saving debug GIF: {e_gif}")
 
@@ -623,17 +684,15 @@ def main():
                     "target_entity_code": target_entity_code,
                     "target_entity_name": target_entity_name,
                     "outcome": trial_result.get("outcome", "error"),
-                    "target_acquired": trial_result.get("target_acquired", True), # Default to True if missing (conservative)
+                    "target_acquired": trial_result.get("target_acquired", True),
                     "initial_target_pos_y": trial_result.get("initial_target_pos")[0] if trial_result.get("initial_target_pos") else -1,
                     "initial_target_pos_x": trial_result.get("initial_target_pos")[1] if trial_result.get("initial_target_pos") else -1,
                     "final_player_pos_y": trial_result.get("final_player_pos")[0] if trial_result.get("final_player_pos") else -1,
                     "final_player_pos_x": trial_result.get("final_player_pos")[1] if trial_result.get("final_player_pos") else -1,
-                    "max_activation_calibration": max_activation,
                     "intervention_value": intervention_value,
                     "intervention_radius": args.intervention_radius,
-                    "calibration_factor": args.calibration_factor,
-                    "intervention_pos_y": args.intervention_position[0], # Record intervention pos y (activation coords)
-                    "intervention_pos_x": args.intervention_position[1], # Record intervention pos x (activation coords)
+                    "intervention_pos_y": args.intervention_position[0],
+                    "intervention_pos_x": args.intervention_position[1],
                 })
 
 
@@ -649,12 +708,11 @@ def main():
     print("Generating visualizations...")
     if not results_df.empty:
         try:
-            plt.style.use('seaborn-v0_8-darkgrid')
+            plt.style.use('default')
         except OSError:
             print("Seaborn-v0_8-darkgrid style not available, using default.")
             plt.style.use('default')
 
-        # Calculate success based on new definition:
         # outcome is 'intervention_location' AND target_acquired is False
         results_df['success'] = (results_df['outcome'] == 'intervention_location') & (results_df['target_acquired'] == False)
 
@@ -668,8 +726,8 @@ def main():
         # Ensure indices match before division, fill missing with 0
         success_counts_reindexed = success_counts.reindex(total_valid_trials.index, fill_value=0)
 
-        # Avoid division by zero for channels with 0 valid trials
-        success_rate = (success_counts_reindexed / total_valid_trials.replace(0, np.nan) * 100).fillna(0) # Use NaN then fillna(0)
+        # Avoid division by zero
+        success_rate = (success_counts_reindexed / total_valid_trials.replace(0, np.nan) * 100).fillna(0)
         success_rate = success_rate.unstack(level='channel', fill_value=0)
 
         # Calculate overall success rate
@@ -686,63 +744,126 @@ def main():
         if num_to_visualize > 0:
             # Filter out channels with 0% success rate before finding top N
             non_zero_success = overall_success_rate[overall_success_rate > 0]
-            top_channels = non_zero_success.nlargest(num_to_visualize).index
+            # Handle case where non_zero_success might be shorter than num_to_visualize
+            num_actual_visualize = min(num_to_visualize, len(non_zero_success))
+            if num_actual_visualize > 0:
+                top_channels = non_zero_success.nlargest(num_actual_visualize).index
+            else:
+                top_channels = pd.Index([])
+                print("Skipping visualization: No channels had > 0% success rate.")
         else:
             top_channels = pd.Index([])
+            print("Skipping visualization: num_top_channels_visualize is 0 or less.")
 
+
+        # Only proceed if we have channels to visualize
         if not top_channels.empty:
+
+            # Create descriptive string for plot titles/filenames
+            if args.intervention_is_range:
+                value_title_str = f"Value Range: {args.intervention_min}-{args.intervention_max}"
+            else:
+                value_title_str = f"Fixed Value: {args.intervention_fixed_value}"
+            # value_str is already defined above
+
+            # --- Plotting Loop (Per-Entity and Overall) ---
             success_rate_filtered_cols = success_rate.reindex(columns=top_channels, fill_value=0)
-
-            # Plot: Overall success rate
-            plt.figure(figsize=(max(10, len(top_channels)*0.6), 6))
-            overall_success_rate.loc[top_channels].sort_values(ascending=False).plot(kind='bar')
-            plt.title(f"Overall Success Rate (Intervention Loc Reached, Not Acquired) @ {args.intervention_position} (Act Coords) - Top {len(top_channels)} Channels ({layer_name})") # Updated Title
-            plt.xlabel("Channel Index")
-            plt.ylabel("Success Rate (% of valid trials)")
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            plot_filename = os.path.join(args.output_dir, f"overall_success_rate_{safe_layer_name}_{'sae' if args.is_sae else 'base'}.png")
-            plt.savefig(plot_filename)
-            print(f"Overall success rate plot saved to {plot_filename}")
-            plt.close()
-
-            # Plot: Success rate per target entity
-            num_targets = len(args.target_entities)
-            fig, axes = plt.subplots(num_targets, 1, figsize=(max(10, len(top_channels)*0.6), 4 * num_targets), sharex=True, squeeze=False)
             entity_names_sorted = sorted([ENTITY_CODE_DESCRIPTION[code] for code in args.target_entities])
+            channel_labels = sorted(top_channels.tolist())
 
-            for i, target_name in enumerate(entity_names_sorted):
-                ax = axes[i, 0]
+            for target_name in entity_names_sorted:
+                # Entity-specific directory
+                entity_plot_dir = os.path.join(args.output_dir, safe_layer_name, target_name)
+                os.makedirs(entity_plot_dir, exist_ok=True)
+
+                # --- Generate and Save Overall Plot (Inside Entity Folder) ---
+                fig_overall, ax_overall = plt.subplots(1, 1, figsize=(max(10, len(top_channels)*0.6), 6))
+                overall_success_rate.loc[top_channels].sort_values(ascending=False).plot(kind='bar', ax=ax_overall)
+                ax_overall.set_title(f"Overall Success Rate @ {args.intervention_position} (Act Coords)\\n{value_title_str} - Top {len(top_channels)} Channels ({layer_name})")
+                ax_overall.set_xlabel("Channel Index")
+                ax_overall.set_ylabel("Success Rate (% of valid trials)")
+                if channel_labels:
+                    ax_overall.set_xticks(range(len(channel_labels)))
+                    ax_overall.set_xticklabels(channel_labels, rotation=45, ha='right')
+                else:
+                    ax_overall.set_xticks([])
+                    ax_overall.set_xticklabels([])
+                fig_overall.tight_layout()
+                overall_plot_filename = os.path.join(entity_plot_dir, f"overall_success_rate_{value_str}_{'sae' if args.is_sae else 'base'}_top{len(top_channels)}.png")
+                fig_overall.savefig(overall_plot_filename)
+                print(f"Overall success rate plot saved to {overall_plot_filename}")
+                plt.close(fig_overall)
+                # --- End Overall Plot Saving ---
+
+                # --- Generate and Save Per-Target Plot ---
+                fig_entity, ax_entity = plt.subplots(1, 1, figsize=(max(10, len(top_channels)*0.6), 5))
+                
+                ax_entity.set_ylabel("Success Rate (% of valid trials)")
+                ax_entity.set_ylim(0, 105)
+                ax_entity.set_xlabel("Channel Index")
+                if channel_labels:
+                    ax_entity.set_xticks(range(len(channel_labels)))
+                    ax_entity.set_xticklabels(channel_labels, rotation=45, ha='right')
+                else:
+                    ax_entity.set_xticks([])
+                    ax_entity.set_xticklabels([])
+
                 if target_name in success_rate_filtered_cols.index:
                     data_to_plot = success_rate_filtered_cols.loc[target_name]
-                    data_to_plot = data_to_plot.reindex(top_channels).sort_index()
-                    data_to_plot.plot(kind='bar', ax=ax)
-                    ax.set_title(f"Success Rate for Target Entity: {target_name}") # Simplified title
-                    ax.set_ylabel("Success Rate (% of valid trials)")
-                    ax.set_ylim(0, 105)
+                    data_to_plot = data_to_plot.reindex(channel_labels).fillna(0)
+                    data_to_plot.plot(kind='bar', ax=ax_entity)
+                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - Top {len(channel_labels)} Channels")
                 else:
-                    ax.set_title(f"Success Rate for Target Entity: {target_name} (No data/success)")
-                    ax.set_ylabel("Success Rate (% of valid trials)")
-                    ax.set_ylim(0, 105)
-                    pd.Series(0, index=top_channels.sort_values()).plot(kind='bar', ax=ax, color='lightgrey')
+                    pd.Series(0, index=channel_labels).plot(kind='bar', ax=ax_entity, color='lightgrey')
+                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - No Success in Top Channels")
 
-            axes[-1, 0].set_xlabel("Channel Index")
-            channel_labels = sorted(top_channels.tolist())
-            if channel_labels:
-                axes[-1, 0].set_xticks(range(len(channel_labels)))
-                axes[-1, 0].set_xticklabels(channel_labels, rotation=45, ha='right')
+                entity_plot_filename = os.path.join(entity_plot_dir, f"success_rate_{value_str}_{'sae' if args.is_sae else 'base'}.png")
+                
+                fig_entity.tight_layout()
+                fig_entity.savefig(entity_plot_filename)
+                print(f"Per-target success rate plot saved to {entity_plot_filename}")
+                plt.close(fig_entity)
+            # --- End Plotting Loop ---
+
+            # --- Plot: Scatter plot of successful intervention values vs channel ---
+            # Filter results to only include successful trials for the top channels
+            successful_trials_df = results_df[(results_df['success'] == True) & (results_df['channel'].isin(top_channels))]
+
+            if not successful_trials_df.empty:
+                scatter_plot_dir = os.path.join(args.output_dir, safe_layer_name, "overall_results")
+                os.makedirs(scatter_plot_dir, exist_ok=True)
+
+                fig_height = max(6, len(top_channels) * 0.35)
+                fig_width = max(12, len(top_channels) * 0.5)
+                plt.figure(figsize=(fig_width, fig_height))
+                
+                sns.stripplot(data=successful_trials_df,
+                                x='channel',
+                                y='intervention_value',
+                                hue='target_entity_name', 
+                                palette='tab10',
+                                alpha=0.7,
+                                s=15,
+                                jitter=True,
+                                order=sorted(top_channels.tolist()))
+                
+                plt.xticks(rotation=45, ha='right')
+                plt.xlabel("Channel Index")
+                plt.ylabel("Successful Intervention Value Applied")
+                plt.title(f"Successful Intervention Values per Channel ({layer_name})\n{value_title_str} - Top {len(top_channels)} Channels")
+                plt.legend(title='Target Entity', bbox_to_anchor=(1.05, 1), loc='upper left')
+                plt.grid(axis='x', linestyle='--', alpha=0.6)
+                plt.tight_layout(rect=[0, 0, 0.9, 1])
+                
+                scatter_filename = os.path.join(scatter_plot_dir, f"successful_interventions_scatter_{value_str}_{'sae' if args.is_sae else 'base'}.png")
+                plt.savefig(scatter_filename, bbox_inches='tight')
+                print(f"Successful interventions scatter plot saved to {scatter_filename}")
+                plt.close()
             else:
-                 axes[-1, 0].set_xticks([])
-                 axes[-1, 0].set_xticklabels([])
+                print("Skipping successful interventions scatter plot: No successful trials found for top channels.")
 
-            fig.suptitle(f"Success Rate per Target Entity @ {args.intervention_position} (Act Coords) - Top {len(top_channels)} Channels ({layer_name})", fontsize=16, y=1.02) # Updated Title
-            plt.tight_layout(rect=[0, 0.03, 1, 0.98])
-            plot_filename = os.path.join(args.output_dir, f"per_target_success_rate_{safe_layer_name}_{'sae' if args.is_sae else 'base'}.png")
-            plt.savefig(plot_filename)
-            print(f"Per-target success rate plot saved to {plot_filename}")
-            plt.close()
         else:
-             print("Skipping visualization: No channels achieved successful outcomes or top_channels is empty.")
+             print("Skipping visualization: No channels achieved successful outcomes or top_channels is empty based on criteria.")
     else:
         print("Skipping visualization: No results were generated.")
 
