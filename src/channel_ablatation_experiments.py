@@ -74,11 +74,8 @@ def hook_sae_activations(module, input, output):
         # Decode using the potentially modified activations
         reconstructed_output = sae.decode(modified_acts)
 
-        try:
-            reconstructed_output = reconstructed_output.reshape_as(output)
-        except RuntimeError as e:
-             print(f"Warning: Could not reshape reconstructed output. Shapes: Recon={reconstructed_output.shape}, Original={output.shape}. Error: {e}")
-             return output # Return original if reshape fails
+
+        reconstructed_output = reconstructed_output.reshape_as(output)
 
     return reconstructed_output
 
@@ -90,8 +87,8 @@ layer_number = 8  # conv4a
 layer_name = ordered_layer_names[layer_number]
 
 module = get_module(model, layer_name)
-sae_activations = []  # Clear previous activations
-# Load the SAE model
+sae_activations = []  
+
 assert os.path.exists(sae_checkpoint_path), "SAE checkpoint path not found"
 print(f"Loading ConvSAE model from {sae_checkpoint_path}")
 sae = load_sae_from_checkpoint(sae_checkpoint_path).to(device)
@@ -152,10 +149,8 @@ if last_state_bytes:
     print(f"reward {total_reward}")
   
 
-venv.close() # Ensure environment is closed after analysis
+venv.close() 
 
 
 
 # %%
-
-final_env_state.count_entities(2,0)
