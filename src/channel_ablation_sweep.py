@@ -17,7 +17,7 @@ from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 # import matplotlib.pyplot as plt
 
 # Keep environment creation if needed later, but heist.create_venv used now
-from src.utils.environment_modification_experiments import create_trident_maze
+from src.utils.environment_modification_experiments import create_trident_maze, create_connected_box_maze
 
 from utils.helpers import run_episode_and_get_final_state
 from utils.heist import (
@@ -164,8 +164,8 @@ def main():
     # --- End Load ---
 
     # --- Create Original Venv Once ---
-    print("Creating original trident maze environment...", flush=True)
-    _, venv_original = create_trident_maze()
+    print("Creating original box randomised maze environment...", flush=True)
+    _, venv_original = create_connected_box_maze()
     print("Original environment created.", flush=True)
     # --- Get Initial Entities Once ---
     print("Determining initial entities...", flush=True)
@@ -178,7 +178,7 @@ def main():
         for color_idx, entity_name in COLOR_IDX_TO_ENTITY_NAME.items():
             if initial_env_state.entity_exists(ENTITY_TYPES["key"], color_idx):
                     initial_entities.add(entity_name)
-        print(f"Initial entities (fixed for trident maze): {initial_entities}", flush=True)
+        print(f"Initial entities (randomised for box maze): {initial_entities}", flush=True)
     except Exception as e_init:
         print(f"ERROR: Could not determine initial entities from original venv: {e_init}", flush=True)
         venv_original.close() # Close if we can't proceed
@@ -208,17 +208,17 @@ def main():
         trial_iterator = tqdm(range(args.num_trials), desc=f"Trials Ch {channel_to_keep}", leave=False)
         for trial_idx in trial_iterator:
             venv_trial = None # Ensure venv_trial is defined for finally block
-
+            
             try:
                 # Copy the original venv for this trial
-                venv_trial = copy_venv(venv_original, 0)
+                obs, venv_trial = create_connected_box_maze()
 
                 # 2. Run Simulation
                 save_this_gif = args.save_gifs and trial_idx == 0
                 gif_dir = os.path.join(args.output_dir, f"gifs_ch_{channel_to_keep}")
                 if save_this_gif:
                     os.makedirs(gif_dir, exist_ok=True)
-                gif_path = os.path.join(gif_dir, f"trial_{trial_idx}_trident.gif") if save_this_gif else None
+                gif_path = os.path.join(gif_dir, f"trial_{trial_idx}_box.gif") if save_this_gif else None
 
                 total_reward, frames, last_state_bytes, ended_by_gem, ended_by_timeout = run_episode_and_get_final_state(
                     venv=venv_trial,
@@ -232,34 +232,35 @@ def main():
                 # 3. Calculate Remaining Entities (Simplified)
                 remaining_entities = set() 
                 if last_state_bytes:
-                    try:
-                        final_env_state = EnvState(last_state_bytes)
+                    final_env_state = EnvState(last_state_bytes)
 
-                        # --- Gem Logic --- 
-                        if final_env_state.count_entities(ENTITY_TYPES["gem"]) > 0:
-                            remaining_entities.add(GEM)
+                    # # # --- Gem Logic --- 
+                    # if final_env_state.count_entities(ENTITY_TYPES["gem"]) > 0:
+                    #     remaining_entities.add(GEM)
 
-                        # --- Key Logic (Remains if count is 2) ---
-                        for color_idx, entity_name in COLOR_IDX_TO_ENTITY_NAME.items():
-                            key_count = final_env_state.count_entities(ENTITY_TYPES["key"], color_idx)
-                            if key_count == 2:
-                                remaining_entities.add(entity_name)
-                                
-                    except Exception as e_state:
-                        print(f"Warning: Error parsing final state for Ch {channel_to_keep}, Trial {trial_idx}: {e_state}")
-
+                    # --- Key Logic (Remains if count is 2) ---
+                    for color_idx, entity_name in COLOR_IDX_TO_ENTITY_NAME.items():
+                        key_count = final_env_state.count_entities(ENTITY_TYPES["key"], color_idx)
+                        if key_count == 2:
+                            remaining_entities.add(entity_name)
+                            
+                print(f"Ended by Gem: {ended_by_gem}")
                 collected_entities = initial_entities - remaining_entities
+                if ended_by_gem:
+                    collected_entities.add(GEM)
+                else:
+                    collected_entities.remove(GEM)
+                    remaining_entities.add(GEM)
+                print(f"remaining_entities {remaining_entities}, collected_entities {collected_entities}")
 
-                if not ended_by_gem and GEM in collected_entities:
-                     collected_entities.remove(GEM)
-                elif ended_by_gem and GEM in initial_entities:
-                     collected_entities.add(GEM)
+                # if ended_by_gem and GEM in initial_entities:
+                #      collected_entities.add(GEM)
 
                 # 5. Record Result for this trial/channel
                 channel_results.append({
                     "channel_kept": channel_to_keep,
                     "trial": trial_idx,
-                    "maze_type": "trident",
+                    "maze_type": "box",
                     "initial_entities": set_to_string(initial_entities),
                     "remaining_entities": set_to_string(remaining_entities), # Save the simplified remaining set
                     "collected_entities": set_to_string(collected_entities),   # Save the robust collected set
@@ -275,7 +276,7 @@ def main():
                 channel_results.append({
                     "channel_kept": channel_to_keep,
                     "trial": trial_idx,
-                    "maze_type": "trident",
+                    "maze_type": "box",
                     "initial_entities": "ERROR",
                     "remaining_entities": "ERROR", # <<< Update error reporting
                     "collected_entities": "ERROR", # <<< Update error reporting
