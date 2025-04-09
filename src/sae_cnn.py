@@ -234,6 +234,20 @@ class ConvSAE(nn.Module):
         self.conv_dec = nn.Conv2d(hidden_channels, in_channels, kernel_size=1, bias=True).to(device)
         nn.init.kaiming_uniform_(self.conv_dec.weight, nonlinearity="relu")
 
+    def encode(self, x):
+        """Encodes the input tensor x to latent activations."""
+        # Apply encoder convolution
+        z = self.conv_enc(x)
+        # Apply ReLU activation (common in SAEs)
+        z = F.relu(z)
+        return z
+
+    def decode(self, z):
+        """Decodes the latent activations z back to the original space."""
+        # Apply decoder convolution
+        x_recon = self.conv_dec(z)
+        return x_recon
+
     def forward(self, x, current_l1_coeff=None):
         """
         Args:
@@ -246,11 +260,11 @@ class ConvSAE(nn.Module):
             current_l1_coeff = self.l1_coeff
 
         # Encode
-        z = self.conv_enc(x)            # shape: (B, hidden_channels, H, W)
+        z = self.encode(x)            # shape: (B, hidden_channels, H, W)
         acts = F.relu(z)                # shape: (B, hidden_channels, H, W)
 
         # Decode
-        x_hat = self.conv_dec(acts)     # shape: (B, in_channels, H, W)
+        x_hat = self.decode(acts)     # shape: (B, in_channels, H, W)
 
         # Reconstruction Loss (pixelwise MSE)
         recon_loss = F.mse_loss(x_hat, x, reduction='mean')
@@ -1083,23 +1097,23 @@ def get_sae_activations(model, sae_model, layer_number, observation):
     
     if isinstance(observation, np.ndarray):
         if observation.ndim == 4:
-            observation = torch.tensor(observation, dtype=torch.float32).to(device)
+            observation = t.tensor(observation, dtype=t.float32).to(device)
         else:
-            observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0).to(device)
+            observation = t.tensor(observation, dtype=t.float32).unsqueeze(0).to(device)
     
     if observation.shape[1] == 3 and observation.ndim == 4:
         rgb_obs = observation
     else:
         rgb_obs = observation.permute(0, 3, 1, 2) if observation.ndim == 4 else observation
     
-    with torch.no_grad():
+    with t.no_grad():
         outputs = model(rgb_obs)
     
     original_activations = layer_activations[0]
     handle.remove()
     
     sae_features = None
-    with torch.no_grad():
+    with t.no_grad():
         _, _, sae_features, _ = sae_model(original_activations)
     
     return {
