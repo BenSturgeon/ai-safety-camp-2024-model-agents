@@ -4,6 +4,7 @@ Research on how to both identify optimization targets in model agents, and how t
 
 This repo contains the code for the paper: 
 Discovering Goals in A Deep Reinforcement Learning Model by Studying Steering Vectors
+https://drive.google.com/file/d/1MOBBgG6X8HFuFf2x_pDqIFc3EtTBMcdr/view?usp=sharing
 
 ## Prerequisites
 - Python 3.9 (specific version required)
