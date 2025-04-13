@@ -175,3 +175,5 @@ mlruns/
 # media
 *.gif
 *.png
+src/wandb/
+src/checkpoints/
