@@ -1,6 +1,20 @@
 # AI Safety Camp - Model Agents
 
-Research on how to both identify optimization targets in model agents, and how to robustly influence agent behavior based on modifying those targets.
+
+This repo accompanies our paper exploring how sparse autoencoders (SAEs) can disentangle goal representations in reinforcement learning agents.
+
+We train SAEs on convolutional layers of a CNN-based policy network trained on the Procgen Heist environment.
+Key findings include:
+
+Successful steering via single-channel interventions
+
+Dead SAE channels that still steer the agent
+
+Multiplexed entity representations encoded via activation strength
+
+These results demonstrate how SAEs compress and organize behaviorally-relevant information—and offer insights into interpretability in multi-objective RL settings.
+
+
 
 ## Prerequisites
 - Python 3.9 (specific version required)
