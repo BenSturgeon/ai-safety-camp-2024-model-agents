@@ -199,6 +199,7 @@ class BatchedInterventionExperiment:
 
         # Store intervention position from args
         self.intervention_position = args.intervention_position
+        self.intervention_radius = args.intervention_radius
         self.debug_gif_frames = None # Initialize for GIF debugging
 
         # Initialize model and experiment
@@ -229,90 +230,33 @@ class BatchedInterventionExperiment:
             )
         # --- END OF ADDED BLOCK ---
 
-        # Create output directory with descriptive name
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # --- Output Directory and File Paths ---
+        # Original output directory from args serves as the root for entity-specific folders
+        base_output_dir_from_args = self.args.output_dir
+
+        # Determine primary target entity name for directory path
+        # self.args.target_entities is a list of codes, e.g. [9] for "red_lock"
+        primary_target_entity_code = self.args.target_entities[0] # Assumes at least one entity
+        primary_target_entity_name_str = ENTITY_CODE_DESCRIPTION.get(primary_target_entity_code, f"entity_{primary_target_entity_code}")
+
+        # Define the new self.output_dir to be entity-specific.
+        # This directory will contain all outputs for this specific entity run.
+        self.output_dir = os.path.join(base_output_dir_from_args, f"{primary_target_entity_name_str}_results")
+        os.makedirs(self.output_dir, exist_ok=True) # Ensure this new directory is created
+        print(f"All outputs for this run will be saved to: {self.output_dir}")
+
+        # Determine base filename for outputs (this logic remains largely the same)
+        layer_name_for_file = self.args.layer_spec.replace(".", "_") if not self.args.is_sae else f"sae_layer_{self.args.layer_spec}"
+        intervention_type_for_file = "sae" if self.args.is_sae else "base"
+        self.base_filename_template = f"quantitative_results_{layer_name_for_file}_{intervention_type_for_file}"
         
-        # Get SAE name if it's an SAE experiment
-        sae_name = None
-        if args.is_sae:
-            # Extract SAE name from checkpoint path if available
-            if args.sae_checkpoint_path:
-                checkpoint_name = os.path.basename(args.sae_checkpoint_path)
-                # Try to extract SAE name from checkpoint filename
-                if '_alpha_' in checkpoint_name:
-                    sae_name = 'alpha'
-                elif '_beta_' in checkpoint_name:
-                    sae_name = 'beta'
-                elif '_gamma_' in checkpoint_name:
-                    sae_name = 'gamma'
-                elif '_delta_' in checkpoint_name:
-                    sae_name = 'delta'
-                elif '_epsilon_' in checkpoint_name:
-                    sae_name = 'epsilon'
-                elif '_zeta_' in checkpoint_name:
-                    sae_name = 'zeta'
-                elif '_eta_' in checkpoint_name:
-                    sae_name = 'eta'
-                elif '_theta_' in checkpoint_name:
-                    sae_name = 'theta'
-                elif '_iota_' in checkpoint_name:
-                    sae_name = 'iota'
-                elif '_kappa_' in checkpoint_name:
-                    sae_name = 'kappa'
-                elif '_lambda_' in checkpoint_name:
-                    sae_name = 'lambda'
-                elif '_mu_' in checkpoint_name:
-                    sae_name = 'mu'
-                elif '_nu_' in checkpoint_name:
-                    sae_name = 'nu'
-                elif '_xi_' in checkpoint_name:
-                    sae_name = 'xi'
-                elif '_omicron_' in checkpoint_name:
-                    sae_name = 'omicron'
-                elif '_pi_' in checkpoint_name:
-                    sae_name = 'pi'
-                elif '_rho_' in checkpoint_name:
-                    sae_name = 'rho'
-                elif '_sigma_' in checkpoint_name:
-                    sae_name = 'sigma'
-                elif '_tau_' in checkpoint_name:
-                    sae_name = 'tau'
-                elif '_upsilon_' in checkpoint_name:
-                    sae_name = 'upsilon'
-                elif '_phi_' in checkpoint_name:
-                    sae_name = 'phi'
-                elif '_chi_' in checkpoint_name:
-                    sae_name = 'chi'
-                elif '_psi_' in checkpoint_name:
-                    sae_name = 'psi'
-                elif '_omega_' in checkpoint_name:
-                    sae_name = 'omega'
-        
-        # Create a clean, descriptive directory name
-        if args.is_sae:
-            if sae_name:
-                dir_name = f"sae_{sae_name}_l{args.layer_spec}"
-            else:
-                dir_name = f"sae_l{args.layer_spec}"
-        else:
-            dir_name = f"base_l{args.layer_spec}"
-        
-        # Add experiment parameters in a clean format
-        dir_name += f"_n{args.num_trials}"
-        if args.channels:
-            dir_name += f"_c{'-'.join(map(str, args.channels))}"
-        if args.intervention_is_range:
-            dir_name += f"_i{args.intervention_min:.1f}-{args.intervention_max:.1f}"
-        else:
-            dir_name += f"_i{args.intervention_fixed_value:.1f}"
-        
-        self.output_dir = os.path.join(args.output_dir, dir_name, timestamp)
-        os.makedirs(self.output_dir, exist_ok=True)
-        print(f"Results will be saved to: {self.output_dir}")
+        # Main CSV path will now use the updated (entity-specific) self.output_dir
+        self.main_csv_path = os.path.join(self.output_dir, f"{self.base_filename_template}.csv")
+        self.detailed_results_dir = os.path.join(self.output_dir, "detailed_channel_results") # For per-channel CSVs
+        os.makedirs(self.detailed_results_dir, exist_ok=True)
 
         # --- Pre-calculate the box maze pattern ---
         # This pattern is constant for the entire experiment run.
-        # Logic adapted from create_box_maze:
         box_pattern_template = np.array([
             [0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 1, 1, 1, 0],
@@ -403,12 +347,12 @@ class BatchedInterventionExperiment:
             print(f"[WARNING] intervention_position is not properly set. current_target_actual_grid_pos may be incorrect or None.", flush=True)
             self.current_target_actual_grid_pos = None
 
-
         # Reset the environment to apply the new state and get the first observation.
         # procgen.ProcgenEnv.set_state doesn't return obs, so a reset is needed.
-        with suppress_stderr(): # Mute warnings from this reset if any
-            obs = env.reset()
-        return obs
+        obs = env.reset() # This is a VecEnv, obs should be a batched observation
+        if obs is None:
+            print(f"[WARN _reset_env_to_box_maze] env.reset() returned None for Ch {channel_idx}, TrialCtx {trial_num}")
+        return obs # Returns the observation from the reset environment
 
     def _get_intervention_value(self, trial_idx):
         """Get intervention value for a specific trial."""
@@ -419,50 +363,61 @@ class BatchedInterventionExperiment:
         return self.args.intervention_fixed_value
 
     def run_channel_experiment(self, channel_idx):
-        print(f"[GIF_DEBUG run_channel_experiment] Channel: {channel_idx}, Save GIF arg: {self.args.save_debug_gif}")
-        # Initialize GIF collection structures for channel 0 if enabled
-        self.gif_target_for_current_trial_reached = False # For the specific GIF trial
-        self.gif_frames_after_reach_count = 0 # For the specific GIF trial
-
-        if self.args.save_debug_gif and channel_idx == 0:
-            print("[GIF_DEBUG run_channel_experiment] Initializing self.debug_gif_frames = [] for Ch 0.")
-            self.debug_gif_frames = []
-        else:
-            self.debug_gif_frames = None
-
-        results = []
-        successful_interventions_for_channel = 0 # Renamed for clarity
+        """Run intervention experiment for a single channel across multiple trials."""
+        print(f"Running experiment for channel: {channel_idx}")
+        results = [] # Stores dicts for each trial's outcome {channel, trial_idx, value, success, steps}
+        successful_interventions_for_channel = 0 # Counts successes for the console summary
         prev_game_state_missing_count = 0
-        
-        # Ensure the detailed_results.csv for this channel has headers
-        detailed_log_path = os.path.join(self.output_dir, f"detailed_results_channel_{channel_idx}.csv")
-        with open(detailed_log_path, 'w') as f_detailed:
-            f_detailed.write("channel,trial,intervention_value,success,steps_taken\\n")
+        completed_overall_trial_indices_this_channel = set() # Tracks completed overall trial indices
 
-        # Interventions log (target reached during trial)
-        intervention_reach_log_path = os.path.join(self.output_dir, f"channel_{channel_idx}_intervention_reaches.csv")
-        with open(intervention_reach_log_path, 'w') as f_reach_log:
-            f_reach_log.write(INTERVENTION_REACHED_LOG_HEADER)
+        # --- GIF Debug Initialization for Channel 0 ---
+        self.debug_gif_frames = None
+        self.gif_target_for_current_trial_reached = False
+        self.gif_frames_after_reach_count = 0
+        if channel_idx == 0 and self.args.save_debug_gif:
+            self.debug_gif_frames = []
+            # print(f"[GIF_DEBUG run_channel_experiment] Initializing GIF for Ch 0.")
+        # --- End GIF Debug Initialization ---
 
-
-        # Initial reset for all parallel environments before any batch starts
         current_obs_list = [None] * self.args.num_parallel_envs
-        for i in range(self.args.num_parallel_envs):
-            obs_from_reset = self._reset_env_to_box_maze(self.envs[i], channel_idx, i) # `i` here is env_instance_idx
+        active_trial_overall_indices = [None] * self.args.num_parallel_envs # Stores the overall_trial_idx for the env instance
+        reached_target_flags_this_batch = [False] * self.args.num_parallel_envs
+
+        trials_assigned_in_channel_count = 0 # Tracks overall trials assigned for the channel (0 to num_trials-1)
+
+        # Initial setup for the first effective batch of environments/trials
+        # This ensures all envs that will participate in the very first step have an observation.
+        num_envs_for_first_assignment = min(self.args.num_parallel_envs, self.args.num_trials)
+        for i in range(num_envs_for_first_assignment):
+            current_overall_trial_to_assign = trials_assigned_in_channel_count
             
-            # Store initial observation for GIF if applicable (first trial of first batch of channel 0)
-            if self.debug_gif_frames is not None and i == 0: 
-                print(f"[GIF_DEBUG _reset_env_to_box_maze] Ch {channel_idx}, EnvInstance {i}. Attempting initial frame.")
-                initial_frame_to_store = helpers.prepare_frame_for_gif(obs_from_reset)
-                if initial_frame_to_store is not None:
-                    self.debug_gif_frames.append(initial_frame_to_store)
-                    print(f"[GIF_DEBUG _reset_env_to_box_maze] Initial frame added. Total frames: {len(self.debug_gif_frames)}")
+            if current_overall_trial_to_assign < self.args.num_trials:
+                # Special handling for GIF trial (channel 0, overall_trial_idx 0, which is env instance 0)
+                if channel_idx == 0 and current_overall_trial_to_assign == 0 and self.args.save_debug_gif and self.debug_gif_frames is not None:
+                    # This env (self.envs[0] for trial 0) should already be reset and obs stored if GIF is active
+                    with suppress_stderr(): # env.reset() can be noisy
+                        obs_for_gif_trial = self._reset_env_to_box_maze(self.envs[i], channel_idx, 0) # i should be 0 here
+                    initial_frame = helpers.prepare_frame_for_gif(obs_for_gif_trial)
+                    if initial_frame is not None: self.debug_gif_frames.append(initial_frame)
+                    current_obs_list[i] = obs_for_gif_trial
+                    active_trial_overall_indices[i] = current_overall_trial_to_assign
+                    # print(f"[GIF_DEBUG InitialReset] Ch0, Trial0 (EnvInst {i}) reset for GIF. Obs: {current_obs_list[i] is not None}")
                 else:
-                    print(f"[GIF_DEBUG _reset_env_to_box_maze] Failed to process initial frame from reset.")
-            current_obs_list[i] = obs_from_reset
+                    # Standard reset for other envs in the first batch or if GIF not applicable
+                    current_obs_list[i] = self._reset_env_to_box_maze(self.envs[i], channel_idx, current_overall_trial_to_assign)
+                    active_trial_overall_indices[i] = current_overall_trial_to_assign
+                
+                if current_obs_list[i] is None:
+                    print(f"[CRITICAL_INIT_WARN] _reset_env_to_box_maze returned None for Ch {channel_idx}, initial Trial {current_overall_trial_to_assign} (EnvInst {i}). Expect errors.")
+                
+                trials_assigned_in_channel_count += 1
+            else:
+                # This case (no more trials to assign) shouldn't be hit if loop is num_envs_for_first_assignment
+                active_trial_overall_indices[i] = None 
 
+        # trials_completed_count = 0 # Not strictly needed if using completed_overall_trial_indices_this_channel
 
-        # Process trials in batches
+        # Outer loop for batches of trials
         for batch_start_trial_idx in range(0, self.args.num_trials, self.args.num_parallel_envs):
             num_envs_this_batch = min(self.args.num_parallel_envs, self.args.num_trials - batch_start_trial_idx)
             
@@ -622,7 +577,7 @@ class BatchedInterventionExperiment:
                                                        f"{target_entity_name},"
                                                        f"{self.intervention_position[0]},{self.intervention_position[1]},"
                                                        f"{self.current_target_actual_grid_pos[0]},{self.current_target_actual_grid_pos[1]}\\n")
-                                    with open(intervention_reach_log_path, 'a') as f_reach_log:
+                                    with open(os.path.join(self.output_dir, f"channel_{channel_idx}_intervention_reaches.csv"), 'a') as f_reach_log:
                                         f_reach_log.write(log_entry_reach)
                                     print(f"[REACHED TARGET] Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Ch {channel_idx}, Step {step}. Player@{current_player_grid_pos}, Target@{self.current_target_actual_grid_pos}")
                                     
@@ -634,40 +589,49 @@ class BatchedInterventionExperiment:
                         except Exception as e_heist_state:
                             print(f"Warning: Error getting heist state for Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Step {step}: {e_heist_state}")                            
 
-                    # --- Process 'done' state for the trial assigned to this environment instance ---
-                    if actual_done_from_env:
+                    # --- Process trial termination (due to env done or max_steps) --- 
+                    trial_terminated_by_env = actual_done_from_env
+                    trial_terminated_by_max_steps = (not trial_terminated_by_env) and ((step + 1) >= self.args.max_steps)
+
+                    if (trial_terminated_by_env or trial_terminated_by_max_steps) and \
+                       overall_trial_idx is not None and \
+                       overall_trial_idx not in completed_overall_trial_indices_this_channel:
+                        
                         is_success = reached_target_flags_this_batch[env_instance_idx]
-                        if is_success:
+                        
+                        if is_success: 
                             successful_interventions_for_channel += 1
-                            print(f"[TRIAL DONE - SUCCESS] Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Ch {channel_idx}. Steps: {step + 1}.")
-                        else:
-                            print(f"[TRIAL DONE - FAILURE] Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Ch {channel_idx}. Steps: {step + 1}.")
                         
                         results.append({
-                            'channel': channel_idx, 'trial': overall_trial_idx, 
+                            'channel': channel_idx, 
+                            'trial': overall_trial_idx, # Log the overall trial index 
                             'intervention_value': current_batch_intervention_values[env_instance_idx], 
-                            'success': is_success, 'steps_taken': step + 1 
+                            'success': is_success, 
+                            'steps_taken': step + 1 
                         })
+                        completed_overall_trial_indices_this_channel.add(overall_trial_idx)
+                        # trials_completed_count += 1
                         
-                        # This env instance (self.envs[env_instance_idx]) has finished its assigned trial for this batch.
-                        # Reset it for its *next potential trial* in a *future batch* OR if this was its last trial overall.
-                        # The obs from this reset will be stored in current_obs_list[env_instance_idx] at the end of the inner loop.
-                        obs_from_reset = self._reset_env_to_box_maze(self.envs[env_instance_idx], channel_idx, 
-                                                                    env_instance_idx # Pass env_instance_idx (was trial_num)
-                                                                    )
-                        temp_next_obs_list[env_instance_idx] = obs_from_reset # Store reset obs for next step's input
-                        reached_target_flags_this_batch[env_instance_idx] = False # Reset flag for this env instance's next trial
+                        # Mark this env instance as free by setting its assigned trial to None
+                        # It will be reassigned a new trial (if any remaining for the channel) at the start of the next batch processing.
+                        active_trial_overall_indices[env_instance_idx] = None 
+                        
+                        # Reset environment for its next potential trial (obs stored in temp_next_obs_list)
+                        # The trial_num for reset is mostly for debug/context if _reset_env_to_box_maze uses it.
+                        obs_from_reset = self._reset_env_to_box_maze(self.envs[env_instance_idx], channel_idx, overall_trial_idx + 1) # Next trial number for context
+                        temp_next_obs_list[env_instance_idx] = obs_from_reset
+                        reached_target_flags_this_batch[env_instance_idx] = False # Reset flag for this env for its next trial
 
-                        # If this was the GIF trial and it's now 'actual_done_from_env'
-                        if channel_idx == 0 and batch_start_trial_idx == 0 and env_instance_idx == 0:
-                            print(f"[GIF_DEBUG actual_done_event] GIF trial (Overall {overall_trial_idx}) is now actual_done_from_env. Forcing GIF stop if not already.")
+                        # GIF handling: If this was the designated GIF trial (overall_trial_idx 0 of channel 0) and it just ended
+                        if channel_idx == 0 and overall_trial_idx == 0: # No longer relying on batch_start_trial_idx or env_instance_idx for this check
+                            # print(f"[GIF_DEBUG trial_end_event] GIF trial (Overall {current_overall_trial_idx}) ended. Forcing GIF stop.")
                             self.gif_target_for_current_trial_reached = True 
-                            self.gif_frames_after_reach_count = 5 # Force stop GIF collection
+                            self.gif_frames_after_reach_count = self.gif_frames_after_reach_count # Force stop
 
-                        # Check for missing prev_game_state from info_dict_env_i
-                        terminal_game_state = info_dict_env_i.get('prev_game_state')
-                        if terminal_game_state is None:
-                            prev_game_state_missing_count +=1
+                        if trial_terminated_by_env:
+                            terminal_game_state = info_dict_env_i.get('prev_game_state')
+                            if terminal_game_state is None:
+                                prev_game_state_missing_count +=1
                 
                 # Update current_obs_list with all the next_obs from the step (or resets if done)
                 for i in range(num_envs_this_batch):
@@ -699,33 +663,25 @@ class BatchedInterventionExperiment:
             self.debug_gif_frames = None # Clear frames for this channel
 
         # Final success rate calculation and logging for the channel
-        final_total_trials_run_for_channel = len(results)
+        final_total_trials_run_for_channel = len(results) # This should now be equal to self.args.num_trials if all ran
 
-        if final_total_trials_run_for_channel > 0:
-            # successful_interventions_for_channel already counted
-            success_rate = successful_interventions_for_channel / final_total_trials_run_for_channel
+        if self.args.num_trials > 0:
+            # success_rate_for_console = successful_interventions_for_channel / self.args.num_trials
+            # For console, just report counts as rate is less meaningful with varying intervention values
+            print(f"CHANNEL {channel_idx} SUMMARY: {successful_interventions_for_channel}/{self.args.num_trials} successful trials (across varying intervention values).")
         else:
-            success_rate = 0
-            if self.args.num_trials > 0:
-                 print(f"Warning: No trials were logged to results for channel {channel_idx}, but num_trials was {self.args.num_trials}")
-
-        print(f"CHANNEL {channel_idx} SUMMARY: Success Rate = {success_rate:.4f} ({successful_interventions_for_channel}/{final_total_trials_run_for_channel} successful trials)")
+            # success_rate_for_console = 0.0
+            print(f"CHANNEL {channel_idx} SUMMARY: 0/0 successful trials.")
         
-        # Append all results for this channel to its detailed_results.csv
-        # This is slightly redundant if we write per trial, but good for a consolidated check / if per-trial write failed.
-        # The current logic writes to results list, then this loop writes it all.
-        for res_entry in results:
-             with open(detailed_log_path, 'a') as f_detailed: # Append mode now, header written once.
-                f_detailed.write(f"{res_entry['channel']},{res_entry['trial']},{res_entry['intervention_value']},{res_entry['success']},{res_entry['steps_taken']}\\n")
-
         if prev_game_state_missing_count > 0:
              print(f"Info: For channel {channel_idx}, 'prev_game_state' was not found in info dict for {prev_game_state_missing_count} / {final_total_trials_run_for_channel} trials where env signaled done.")
-        
+
         return {
             "channel": channel_idx,
-            "success_rate": success_rate,
+            # "success_rate": success_rate_for_console, # No longer the primary reported metric here
             "successful_interventions": successful_interventions_for_channel,
-            "total_trials": final_total_trials_run_for_channel 
+            "total_trials": self.args.num_trials, # Report based on requested trials
+            "detailed_trial_results": results  # Add the list of detailed trial results
         }
 
     def _get_target_env_pos(self, state_obj):
@@ -799,7 +755,6 @@ class BatchedInterventionExperiment:
         for result in all_results:
             summary_data.append({
                 'channel': result['channel'],
-                'success_rate': result['success_rate'],
                 'successful_interventions': result['successful_interventions'],
                 'total_trials': result['total_trials']
             })
@@ -810,10 +765,16 @@ class BatchedInterventionExperiment:
         # Create DataFrame for detailed results
         detailed_data = []
         for result in all_results:
-            detailed_data.extend(result['results'])
+            if 'detailed_trial_results' in result: # Check if the key exists
+                detailed_data.extend(result['detailed_trial_results'])
+            else:
+                print(f"Warning: 'detailed_trial_results' key missing in result for channel {result.get('channel', 'Unknown')}. Skipping for detailed_results.csv")
         
-        detailed_df = pd.DataFrame(detailed_data)
-        detailed_df.to_csv(os.path.join(self.output_dir, 'detailed_results.csv'), index=False)
+        if detailed_data: # Only save if there is data
+            detailed_df = pd.DataFrame(detailed_data)
+            detailed_df.to_csv(os.path.join(self.output_dir, 'detailed_results.csv'), index=False)
+        else:
+            print(f"Warning: No data collected for detailed_results.csv. File will not be created.")
 
     def _generate_visualization(self, all_results):
         """Generate visualization of experiment results."""
@@ -822,22 +783,22 @@ class BatchedInterventionExperiment:
         for result in all_results:
             data.append({
                 'Channel': result['channel'],
-                'Success Rate': result['success_rate']
+                'Successful Interventions': result['successful_interventions']
             })
         
         df = pd.DataFrame(data)
 
         # Create plot
         plt.figure(figsize=(12, 6))
-        sns.barplot(data=df, x='Channel', y='Success Rate')
-        plt.title('Intervention Success Rate by Channel')
+        sns.barplot(data=df, x='Channel', y='Successful Interventions')
+        plt.title('Intervention Successful Interventions by Channel')
         plt.xlabel('Channel Index')
-        plt.ylabel('Success Rate')
+        plt.ylabel('Successful Interventions')
         plt.xticks(rotation=45)
         plt.tight_layout()
 
         # Save plot
-        plt.savefig(os.path.join(self.output_dir, 'success_rate_by_channel.png'))
+        plt.savefig(os.path.join(self.output_dir, 'successful_interventions_by_channel.png'))
         plt.close()
 
     def _generate_entity_distribution_plot(self):
