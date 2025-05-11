@@ -17,7 +17,7 @@ from contextlib import contextmanager # For muting stderr
 # Project imports
 from base_model_intervention import BaseModelInterventionExperiment
 from sae_spatial_intervention import SAEInterventionExperiment, ordered_layer_names
-from utils.environment_modification_experiments import create_box_maze
+from utils.create_intervention_mazes import create_box_maze
 from utils import heist
 from utils import helpers
 
@@ -38,7 +38,7 @@ DEFAULT_MODEL_BASE_DIR = "models"
 DEFAULT_SAE_CHECKPOINT_DIR = "checkpoints"
 
 # Log header for intervention reach events
-INTERVENTION_REACHED_LOG_HEADER = "Timestamp,Trial,Step,Channel,InterventionValue,TargetEntityName,ActivationPosY,ActivationPosX,TargetEnvPosY,TargetEnvPosX\n"
+INTERVENTION_REACHED_LOG_HEADER = "Timestamp,Trial,Step,Channel,InterventionValue,TargetEntityName,ActivationPosY,ActivationPosX,TargetEnvPosY,TargetEnvPosX,CurrentTargetEntityName\n"
 
 # Context manager to suppress stderr
 @contextmanager
@@ -192,10 +192,17 @@ def parse_args():
     return args 
 
 class BatchedInterventionExperiment:
-    def __init__(self, args):
+    def __init__(self, args, current_target_entity_code):
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
+
+        # Store current target entity
+        self.current_target_entity_code = current_target_entity_code
+        self.current_target_entity_name = ENTITY_CODE_DESCRIPTION.get(
+            self.current_target_entity_code, f"entity_{self.current_target_entity_code}"
+        )
+        print(f"Initializing experiment for target entity: {self.current_target_entity_name} (Code: {self.current_target_entity_code})")
 
         # Store intervention position from args
         self.intervention_position = args.intervention_position
@@ -234,26 +241,27 @@ class BatchedInterventionExperiment:
         # Original output directory from args serves as the root for entity-specific folders
         base_output_dir_from_args = self.args.output_dir
 
-        # Determine primary target entity name for directory path
-        # self.args.target_entities is a list of codes, e.g. [9] for "red_lock"
-        primary_target_entity_code = self.args.target_entities[0] # Assumes at least one entity
-        primary_target_entity_name_str = ENTITY_CODE_DESCRIPTION.get(primary_target_entity_code, f"entity_{primary_target_entity_code}")
+        # self.output_dir is the main directory for this run (e.g., quantitative_intervention_results/experiment_X)
+        # This will contain the final aggregated CSVs and plots.
+        self.output_dir = base_output_dir_from_args # General output dir
 
-        # Define the new self.output_dir to be entity-specific.
-        # This directory will contain all outputs for this specific entity run.
-        self.output_dir = os.path.join(base_output_dir_from_args, f"{primary_target_entity_name_str}_results")
-        os.makedirs(self.output_dir, exist_ok=True) # Ensure this new directory is created
-        print(f"All outputs for this run will be saved to: {self.output_dir}")
+        # Define an entity-specific subdirectory for logs like GIFs and reach events
+        self.entity_specific_output_dir = os.path.join(
+            self.output_dir, f"{self.current_target_entity_name}_specific_logs"
+        )
+        os.makedirs(self.entity_specific_output_dir, exist_ok=True)
+        print(f"Entity-specific logs (GIFs, reach events) will be saved to: {self.entity_specific_output_dir}")
 
-        # Determine base filename for outputs (this logic remains largely the same)
-        layer_name_for_file = self.args.layer_spec.replace(".", "_") if not self.args.is_sae else f"sae_layer_{self.args.layer_spec}"
-        intervention_type_for_file = "sae" if self.args.is_sae else "base"
-        self.base_filename_template = f"quantitative_results_{layer_name_for_file}_{intervention_type_for_file}"
-        
-        # Main CSV path will now use the updated (entity-specific) self.output_dir
-        self.main_csv_path = os.path.join(self.output_dir, f"{self.base_filename_template}.csv")
-        self.detailed_results_dir = os.path.join(self.output_dir, "detailed_channel_results") # For per-channel CSVs
-        os.makedirs(self.detailed_results_dir, exist_ok=True)
+        # Directory for intervention reach logs (per-channel, per-entity)
+        self.intervention_reach_log_dir = os.path.join(self.entity_specific_output_dir, "intervention_reach_logs")
+        os.makedirs(self.intervention_reach_log_dir, exist_ok=True)
+
+        # Create the header for reach logs if the directory is new or file doesn't exist for channel 0 (as a proxy)
+        # This is a bit of a heuristic; ideally, each file would get its header.
+        # For simplicity, let's ensure the main log *directory* exists and header is written once per entity if needed.
+        # The actual writing happens in run_channel_experiment, which will append.
+        # We can write a general header file in self.intervention_reach_log_dir to indicate its purpose.
+        # Actual per-channel files will be created on demand.
 
         # --- Pre-calculate the box maze pattern ---
         # This pattern is constant for the entire experiment run.
@@ -269,29 +277,44 @@ class BatchedInterventionExperiment:
         self.box_maze_pattern = box_pattern_template.copy()
         loc_entity1 = (box_pattern_template == 3)
         loc_entity2 = (box_pattern_template == 4) # entity2 is None for these experiments
-        self.box_maze_pattern[loc_entity1] = self.args.target_entities[0] # Use the first (and only) target entity
+        self.box_maze_pattern[loc_entity1] = self.current_target_entity_code # Use the current_target_entity_code
         self.box_maze_pattern[loc_entity2] = 1 # Replace entity2 placeholder with corridor
+
+        # --- Store initial distractor position ---
+        self.initial_distractor_pattern_pos = None
+        distractor_loc_in_pattern = np.where(self.box_maze_pattern == self.current_target_entity_code)
+        if distractor_loc_in_pattern[0].size > 0:
+            # pattern is (row, col) from top-left, but intuitive y is from bottom
+            # For heist.is_entity_at, we need world coordinates.
+            # This will be calculated more robustly within _reset_env_to_box_maze
+            # and stored as self.current_distractor_actual_grid_pos
+            pass # Defer calculation to where world_dim is confirmed.
+
+        self.current_distractor_actual_grid_pos = None # Will be set in _reset_env_to_box_maze
 
         # Constants for applying the pattern (from create_custom_maze_sequence)
         self.maze_size = 7 # Specific to create_box_maze
         self.entity_mapping = { # Simplified for what box_maze uses
             2: {"type": "player", "color": None}, # Player
-            self.args.target_entities[0]: {"type": "gem", "color": "blue"} # Assuming target is a gem-like entity
+            # self.args.target_entities[0]: {"type": "gem", "color": "blue"} # Assuming target is a gem-like entity
             # This mapping needs to be more robust if target_entities[0] can be keys etc.
             # For now, assuming target_entities[0] is a code like 3 (gem), 4 (blue_key) etc.
         }
         # Refine entity_mapping based on actual entity codes from ENTITY_CODE_DESCRIPTION
-        # The key 'self.args.target_entities[0]' is an ENTITY_CODE (e.g., 3 for gem)
+        # The key 'self.current_target_entity_code' is an ENTITY_CODE (e.g., 3 for gem)
         # We need to map this code to its type and color for heist.ENTITY_TYPES and heist.ENTITY_COLORS
-        entity_code = self.args.target_entities[0]
-        entity_desc_name = ENTITY_CODE_DESCRIPTION.get(entity_code)
+        entity_code_to_map = self.current_target_entity_code
+        entity_desc_name = ENTITY_CODE_DESCRIPTION.get(entity_code_to_map)
         if entity_desc_name:
             if "key" in entity_desc_name:
                 color = entity_desc_name.split('_')[0]
-                self.entity_mapping[entity_code] = {"type": "key", "color": color}
+                self.entity_mapping[entity_code_to_map] = {"type": "key", "color": color}
             elif "gem" in entity_desc_name:
-                self.entity_mapping[entity_code] = {"type": "gem", "color": None} # Gems in heist don't have color types in ENTITY_COLORS
-            # Add locks if they can be target_entities[0]
+                self.entity_mapping[entity_code_to_map] = {"type": "gem", "color": None} # Gems in heist don't have color types in ENTITY_COLORS
+            elif "lock" in entity_desc_name: # Added for locks
+                color = entity_desc_name.split('_')[0]
+                self.entity_mapping[entity_code_to_map] = {"type": "lock", "color": color}
+
         # Ensure player is in mapping
         if 2 not in self.entity_mapping: # 2 is the player's code in the pattern
              self.entity_mapping[2] =  {"type": "player", "color": None}
@@ -305,7 +328,7 @@ class BatchedInterventionExperiment:
             # The initial call to create_box_maze is mostly to get a correctly wrapped venv object.
             # The actual maze structure from this initial call might be immediately overridden.
              _, venv = create_box_maze(
-                 entity1=self.args.target_entities[0], # This sets it up initially
+                 entity1=self.current_target_entity_code, # This sets it up initially
                  entity2=None
              )
             # Store world_dim from one of the envs, assuming it's constant
@@ -322,30 +345,33 @@ class BatchedInterventionExperiment:
 
         # Create the state-bytes-generating function for procgen
         state_bytes_generator_fn = self._generate_procgen_state_bytes_function(
-            initial_state_bytes_for_setup, 
-            self.box_maze_pattern, 
+            initial_state_bytes_for_setup,
+            self.box_maze_pattern,
             self.world_dim # self.world_dim should be correctly set from __init__
         )
-        
-        # Get the actual state bytes for our custom maze
-        state_bytes_to_set = state_bytes_generator_fn(0) # The '0' is a dummy seed
+
+        # Get the actual state bytes for our custom maze AND the intended distractor position from the pattern
+        state_bytes_to_set, intended_distractor_world_coords_from_pattern = state_bytes_generator_fn(0)
 
         # Use the environment's callmethod to set its state
         env.env.callmethod("set_state", [state_bytes_to_set])
 
-        # The target position is now directly from the intervention_position argument
+        # The target position for intervention (ATZ) is now directly from the intervention_position argument
         if self.intervention_position and len(self.intervention_position) == 2:
-            # IMPORTANT: Ensure intervention_position is in WORLD coordinates, not pattern coordinates.
-            # If intervention_position is given in pattern's intuitive coordinates (y_pat, x_pat),
-            # it needs to be converted to world coordinates here.
-            # Assuming self.intervention_position IS ALREADY in world coordinates for now.
-            # If it's (row, col) from the activation map, it needs to map to world grid.
-            # For now, direct use:
             self.current_target_actual_grid_pos = (self.intervention_position[0], self.intervention_position[1])
-            # print(f"[DEBUG Target Set Directly from --intervention_position]: {self.current_target_actual_grid_pos} (World Dim: {self.world_dim}x{self.world_dim}) for env {id(env)}")
         else:
-            print(f"[WARNING] intervention_position is not properly set. current_target_actual_grid_pos may be incorrect or None.", flush=True)
+            print(f"[WARNING] intervention_position (ATZ) is not properly set. current_target_actual_grid_pos may be incorrect or None.", flush=True)
             self.current_target_actual_grid_pos = None
+
+        # --- Set and Verify Distractor Position ---
+        self.current_distractor_actual_grid_pos = None # Reset before setting
+        if intended_distractor_world_coords_from_pattern:
+            # These are the integer grid coordinates (row, col) from our pattern
+            self.current_distractor_actual_grid_pos = intended_distractor_world_coords_from_pattern
+            # print(f"[DEBUG _reset_env] Set self.current_distractor_actual_grid_pos directly from pattern to: {self.current_distractor_actual_grid_pos}")
+        else:
+            print(f"[WARN _reset_env] Distractor {self.current_target_entity_name} was not defined in the box_maze_pattern. Its position will be None.")
+            self.current_distractor_actual_grid_pos = None # Explicitly None if not in pattern
 
         # Reset the environment to apply the new state and get the first observation.
         # procgen.ProcgenEnv.set_state doesn't return obs, so a reset is needed.
@@ -382,6 +408,12 @@ class BatchedInterventionExperiment:
         current_obs_list = [None] * self.args.num_parallel_envs
         active_trial_overall_indices = [None] * self.args.num_parallel_envs # Stores the overall_trial_idx for the env instance
         reached_target_flags_this_batch = [False] * self.args.num_parallel_envs
+        # New tracking for outcome and distractor acquisition for each env in the batch
+        trial_outcomes_this_batch = [None] * self.args.num_parallel_envs
+        distractor_acquired_flags_this_batch = [False] * self.args.num_parallel_envs
+        # Store initial distractor position for each env, assuming it might vary slightly if maze generation is not perfectly deterministic
+        # However, our _reset_env_to_box_maze should be deterministic for a given entity.
+        # So, self.current_distractor_actual_grid_pos (set in _reset_env_to_box_maze) should be used.
 
         trials_assigned_in_channel_count = 0 # Tracks overall trials assigned for the channel (0 to num_trials-1)
 
@@ -423,6 +455,12 @@ class BatchedInterventionExperiment:
             
             # For each env instance, track if its *current assigned trial for this batch* has reached the target
             reached_target_flags_this_batch = [False] * num_envs_this_batch
+            # New tracking for outcome and distractor acquisition for each env in the batch
+            trial_outcomes_this_batch = [None] * num_envs_this_batch
+            distractor_acquired_flags_this_batch = [False] * num_envs_this_batch
+            # Store initial distractor position for each env, assuming it might vary slightly if maze generation is not perfectly deterministic
+            # However, our _reset_env_to_box_maze should be deterministic for a given entity.
+            # So, self.current_distractor_actual_grid_pos (set in _reset_env_to_box_maze) should be used.
 
             # Reset GIF control flags specifically if this batch contains the designated GIF trial
             # The GIF trial is always the absolute first trial (trial_idx 0) of channel 0.
@@ -549,7 +587,7 @@ class BatchedInterventionExperiment:
                             frame_to_store = helpers.prepare_frame_for_gif(temp_next_obs_list[env_instance_idx]) # Use the very latest obs
                             if frame_to_store is not None:
                                 self.debug_gif_frames.append(frame_to_store)
-                                print(f"[GIF_DEBUG step_loop] GIF Frame. Ch{channel_idx},Trial{overall_trial_idx},Step{step}. TargetReached: {self.gif_target_for_current_trial_reached}, AfterCount: {self.gif_frames_after_reach_count}. Frames: {len(self.debug_gif_frames)}")
+                                # print(f"[GIF_DEBUG step_loop] GIF Frame. Ch{channel_idx},Trial{overall_trial_idx},Step{step}. TargetReached: {self.gif_target_for_current_trial_reached}, AfterCount: {self.gif_frames_after_reach_count}. Frames: {len(self.debug_gif_frames)}")
                                 if self.gif_target_for_current_trial_reached:
                                     self.gif_frames_after_reach_count += 1
                             else:
@@ -563,55 +601,129 @@ class BatchedInterventionExperiment:
                     if not reached_target_flags_this_batch[env_instance_idx] and self.current_target_actual_grid_pos is not None:
                         try:
                             # heist.state_from_venv expects the VecEnv and the sub-env index (0 for our size-1 VecEnvs)
-                            current_env_state = heist.state_from_venv(self.envs[env_instance_idx], 0)
-                            player_pos = current_env_state.mouse_pos 
+                            current_env_state_for_atz_check = heist.state_from_venv(self.envs[env_instance_idx], 0)
+                            player_pos = current_env_state_for_atz_check.mouse_pos
                             if player_pos and not (np.isnan(player_pos[0]) or np.isnan(player_pos[1])):
                                 current_player_grid_pos = (int(player_pos[0]), int(player_pos[1]))
                                 if current_player_grid_pos == self.current_target_actual_grid_pos:
-                                    reached_target_flags_this_batch[env_instance_idx] = True
+                                    reached_target_flags_this_batch[env_instance_idx] = True # ATZ reached
+                                    if trial_outcomes_this_batch[env_instance_idx] is None: # Only set if not already set (e.g. by distractor acq)
+                                        trial_outcomes_this_batch[env_instance_idx] = 'intervention_location'
+
                                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-                                    target_entity_name = ENTITY_CODE_DESCRIPTION.get(self.args.target_entities[0], 'unknown_target')
-                                    
+                                    target_entity_name_for_log = self.current_target_entity_name # Use current entity name for the log
+
                                     log_entry_reach = (f"{timestamp},{overall_trial_idx},{step},{channel_idx},"
                                                        f"{current_batch_intervention_values[env_instance_idx]},"
-                                                       f"{target_entity_name},"
-                                                       f"{self.intervention_position[0]},{self.intervention_position[1]},"
-                                                       f"{self.current_target_actual_grid_pos[0]},{self.current_target_actual_grid_pos[1]}\\n")
-                                    with open(os.path.join(self.output_dir, f"channel_{channel_idx}_intervention_reaches.csv"), 'a') as f_reach_log:
-                                        f_reach_log.write(log_entry_reach)
-                                    print(f"[REACHED TARGET] Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Ch {channel_idx}, Step {step}. Player@{current_player_grid_pos}, Target@{self.current_target_actual_grid_pos}")
+                                                       f"{self.args.intervention_position[0]},{self.args.intervention_position[1]}," # ATZ Y, ATZ X (activation map coords)
+                                                       f"{self.current_target_actual_grid_pos[0]},{self.current_target_actual_grid_pos[1]}," # ATZ Y, ATZ X (env coords)
+                                                       f"{target_entity_name_for_log}\\n") # Name of the distractor entity
                                     
+                                    reach_log_path = os.path.join(self.intervention_reach_log_dir, f"channel_{channel_idx}_intervention_reaches.csv")
+                                    # Write header if file is new
+                                    if not os.path.exists(reach_log_path):
+                                        with open(reach_log_path, 'w') as f_reach_log:
+                                            f_reach_log.write("Timestamp,Trial,Step,Channel,InterventionValue,ActivationPosY,ActivationPosX,TargetEnvPosY,TargetEnvPosX,DistractorEntityName\n") # Clarified header
+
+                                    with open(reach_log_path, 'a') as f_reach_log:
+                                        f_reach_log.write(log_entry_reach)
+                                    print(f"[REACHED TARGET] Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Ch {channel_idx}, Step {step}, Entity {self.current_target_entity_name}. Player@{current_player_grid_pos}, Target@{self.current_target_actual_grid_pos}")
+
                                     # GIF specific: if this is the designated GIF trial and target is now reached
                                     if channel_idx == 0 and batch_start_trial_idx == 0 and env_instance_idx == 0:
                                         if not self.gif_target_for_current_trial_reached: # Ensure this is the first time
                                             self.gif_target_for_current_trial_reached = True
                                             print(f"[GIF_DEBUG target_reached_event] GIF trial (Overall {overall_trial_idx}) target reached at step {step}. Will start collecting post-reach frames.")
                         except Exception as e_heist_state:
-                            print(f"Warning: Error getting heist state for Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Step {step}: {e_heist_state}")                            
+                            print(f"Warning: Error getting heist state for Trial {overall_trial_idx} (EnvInst {env_instance_idx}), Step {step} for ATZ check: {e_heist_state}")
 
-                    # --- Process trial termination (due to env done or max_steps) --- 
+                    # --- Check for distractor acquisition IN-STEP ---
+                    if not distractor_acquired_flags_this_batch[env_instance_idx] and self.current_distractor_actual_grid_pos is not None:
+                        try:
+                            current_env_state_for_distractor_check = heist.state_from_venv(self.envs[env_instance_idx], 0)
+                            # Check if the specific distractor entity is still at its initial position
+                            # self.current_target_entity_code is the distractor's type code
+                            # We need to map this to heist's internal type and color codes
+                            distractor_mapping_info = self.entity_mapping.get(self.current_target_entity_code)
+                            if distractor_mapping_info:
+                                dist_type_str = distractor_mapping_info["type"]
+                                dist_color_str = distractor_mapping_info["color"]
+                                dist_type_code_heist = heist.ENTITY_TYPES.get(dist_type_str)
+                                dist_color_code_heist = heist.ENTITY_COLORS.get(dist_color_str) if dist_color_str else None
+
+                                if dist_type_code_heist is not None:
+                                    # --- Inline is_entity_at logic --- 
+                                    distractor_still_present_at_initial_pos = False
+                                    all_current_entities_in_env = current_env_state_for_distractor_check.get_entities()
+                                    for ent_dict in all_current_entities_in_env:
+                                        if (
+                                            ent_dict["image_type"].val == dist_type_code_heist and
+                                            ent_dict["image_theme"].val == dist_color_code_heist and
+                                            # Compare integer grid positions
+                                            int(ent_dict["y"].val) == self.current_distractor_actual_grid_pos[0] and
+                                            int(ent_dict["x"].val) == self.current_distractor_actual_grid_pos[1]
+                                        ):
+                                            distractor_still_present_at_initial_pos = True
+                                            break
+                                    # --- End of inline is_entity_at logic ---
+                                    
+                                    if not distractor_still_present_at_initial_pos:
+                                        distractor_acquired_flags_this_batch[env_instance_idx] = True
+                                        if trial_outcomes_this_batch[env_instance_idx] is None: # Set outcome if not already set by ATZ reach
+                                            trial_outcomes_this_batch[env_instance_idx] = 'distractor_acquired'
+                            else:
+                                print(f"[WARN] No entity mapping found for current distractor code {self.current_target_entity_code} during acquisition check.")
+
+                        except Exception as e_dist_acq_check:
+                            print(f"Warning: Error checking distractor acquisition for Trial {overall_trial_idx}, Step {step}: {e_dist_acq_check}")
+
+
+                    # --- Process trial termination (due to env done or max_steps) ---
                     trial_terminated_by_env = actual_done_from_env
                     trial_terminated_by_max_steps = (not trial_terminated_by_env) and ((step + 1) >= self.args.max_steps)
 
                     if (trial_terminated_by_env or trial_terminated_by_max_steps) and \
                        overall_trial_idx is not None and \
                        overall_trial_idx not in completed_overall_trial_indices_this_channel:
+
+                        # is_success = reached_target_flags_this_batch[env_instance_idx] # Old definition
+                        final_trial_outcome = trial_outcomes_this_batch[env_instance_idx]
+                        final_distractor_acquired = distractor_acquired_flags_this_batch[env_instance_idx]
+
+                        if final_trial_outcome is None: # If no specific event caused termination
+                            if trial_terminated_by_max_steps:
+                                final_trial_outcome = 'max_steps'
+                            elif trial_terminated_by_env: # Some other reason for env done
+                                final_trial_outcome = 'env_done_other'
+                            else: # Should not happen
+                                final_trial_outcome = 'unknown'
                         
-                        is_success = reached_target_flags_this_batch[env_instance_idx]
-                        
-                        if is_success: 
+                        # For overall success count for console summary (ATZ reached AND distractor NOT acquired)
+                        # This matches the plot_entity_distribution.py success criteria.
+                        is_plot_success = (final_trial_outcome == 'intervention_location') and not final_distractor_acquired
+                        if is_plot_success:
                             successful_interventions_for_channel += 1
-                        
+
                         results.append({
-                            'channel': channel_idx, 
-                            'trial': overall_trial_idx, # Log the overall trial index 
-                            'intervention_value': current_batch_intervention_values[env_instance_idx], 
-                            'success': is_success, 
-                            'steps_taken': step + 1 
+                            'channel': channel_idx,
+                            'trial': overall_trial_idx,
+                            'intervention_value': current_batch_intervention_values[env_instance_idx],
+                            # 'success': is_success, # Removed old success
+                            'steps_taken': step + 1,
+                            'target_entity_code': self.current_target_entity_code, # This is the distractor code
+                            'target_entity_name': self.current_target_entity_name, # This is the distractor name
+                            'layer_spec': self.args.layer_spec,
+                            'is_sae': self.args.is_sae,
+                            'activation_pos_y': self.args.intervention_position[0] if self.args.intervention_position else None,
+                            'activation_pos_x': self.args.intervention_position[1] if self.args.intervention_position else None,
+                            'intervention_radius': self.args.intervention_radius,
+                            'atz_env_pos_y': self.current_target_actual_grid_pos[0] if self.current_target_actual_grid_pos else None,
+                            'atz_env_pos_x': self.current_target_actual_grid_pos[1] if self.current_target_actual_grid_pos else None,
+                            'outcome': final_trial_outcome, # New: 'intervention_location', 'distractor_acquired', 'max_steps', etc.
+                            'target_acquired': final_distractor_acquired, # New: boolean, True if distractor was acquired
                         })
                         completed_overall_trial_indices_this_channel.add(overall_trial_idx)
-                        # trials_completed_count += 1
-                        
+
                         # Mark this env instance as free by setting its assigned trial to None
                         # It will be reassigned a new trial (if any remaining for the channel) at the start of the next batch processing.
                         active_trial_overall_indices[env_instance_idx] = None 
@@ -650,8 +762,9 @@ class BatchedInterventionExperiment:
         # Save debug GIF (occurs once per channel, only if channel_idx is 0)
         if self.debug_gif_frames is not None: # Implies channel_idx == 0 and self.args.save_debug_gif
             if len(self.debug_gif_frames) > 0:
-                print(f"[GIF_DEBUG mimsave] Saving GIF for Ch {channel_idx} with {len(self.debug_gif_frames)} frames.")
-                gif_path = os.path.join(self.output_dir, f"debug_channel_{channel_idx}_trial_0.gif") 
+                print(f"[GIF_DEBUG mimsave] Saving GIF for Ch {channel_idx}, Entity {self.current_target_entity_name} with {len(self.debug_gif_frames)} frames.")
+                gif_filename = f"debug_entity_{self.current_target_entity_name}_channel_{channel_idx}_trial_0.gif"
+                gif_path = os.path.join(self.entity_specific_output_dir, gif_filename)
                 try:
                     imageio.mimsave(gif_path, self.debug_gif_frames, fps=10) # Increased fps
                     print(f"Saved debug GIF to {gif_path}")
@@ -681,7 +794,9 @@ class BatchedInterventionExperiment:
             # "success_rate": success_rate_for_console, # No longer the primary reported metric here
             "successful_interventions": successful_interventions_for_channel,
             "total_trials": self.args.num_trials, # Report based on requested trials
-            "detailed_trial_results": results  # Add the list of detailed trial results
+            "detailed_trial_results": results,  # Add the list of detailed trial results
+            "target_entity_code": self.current_target_entity_code, # For aggregation later
+            "target_entity_name": self.current_target_entity_name  # For aggregation later
         }
 
     def _get_target_env_pos(self, state_obj):
@@ -733,23 +848,28 @@ class BatchedInterventionExperiment:
                 channels_to_run = range(self.experiment.num_channels)
 
         # Run experiments for each channel
-        all_results = []
-        for channel_idx in tqdm(channels_to_run, desc="Processing channels"):
-            channel_results = self.run_channel_experiment(channel_idx)
-            all_results.append(channel_results)
+        all_results_for_current_entity = []
+        for channel_idx in tqdm(channels_to_run, desc=f"Processing channels for {self.current_target_entity_name}"):
+            channel_summary = self.run_channel_experiment(channel_idx)
+            all_results_for_current_entity.append(channel_summary)
 
-        # Save results to CSV
-        self._save_results(all_results)
+        # Save results to CSV (MOVED TO MAIN AFTER ALL ENTITIES)
+        # self._save_results(all_results)
 
-        # Generate visualizations
-        self._generate_visualization(all_results)
-        self._generate_entity_distribution_plot()
+        # Generate visualizations (MOVED TO MAIN AFTER ALL ENTITIES)
+        # self._generate_visualization(all_results)
+        # self._generate_entity_distribution_plot() # This was specific, might need combined version
 
-        # --- Close environments after all experiments are done ---
+        # --- Close environments after all experiments for THIS ENTITY are done ---
         self.close_envs()
+        return all_results_for_current_entity # Return results for this entity
 
     def _save_results(self, all_results):
-        """Save experiment results to CSV file."""
+        """Save experiment results to CSV file.
+        NOTE: This method is NO LONGER CALLED directly by run_experiments.
+        It's kept here as a reference or if needed for per-entity saving,
+        but main saving is handled by save_experiment_data in main().
+        """
         # Create DataFrame for summary statistics
         summary_data = []
         for result in all_results:
@@ -777,7 +897,11 @@ class BatchedInterventionExperiment:
             print(f"Warning: No data collected for detailed_results.csv. File will not be created.")
 
     def _generate_visualization(self, all_results):
-        """Generate visualization of experiment results."""
+        """Generate visualization of experiment results.
+        NOTE: This method is NO LONGER CALLED directly by run_experiments.
+        It's kept here as a reference or if needed for per-entity plotting,
+        but main plotting is handled by generate_experiment_visualizations in main().
+        """
         # Create DataFrame for visualization
         data = []
         for result in all_results:
@@ -802,11 +926,16 @@ class BatchedInterventionExperiment:
         plt.close()
 
     def _generate_entity_distribution_plot(self):
-        """Generate and save entity distribution plot."""
+        """Generate and save entity distribution plot.
+        NOTE: This method is NO LONGER CALLED directly by run_experiments.
+        It's kept here as a reference or if needed for per-entity plotting,
+        but main plotting is handled by generate_experiment_visualizations in main().
+        """
         try:
-            detailed_csv_path = os.path.join(self.output_dir, 'detailed_results.csv')
+            # This would need to point to an entity-specific detailed CSV if used as is
+            detailed_csv_path = os.path.join(self.entity_specific_output_dir, 'detailed_results.csv') # Example path if saving per-entity
             if not os.path.exists(detailed_csv_path) or os.path.getsize(detailed_csv_path) == 0:
-                print(f"Info: Detailed results CSV '{detailed_csv_path}' is empty or not found. Skipping intervention value distribution plot.")
+                print(f"Info: Detailed results CSV '{detailed_csv_path}' for entity {self.current_target_entity_name} is empty or not found. Skipping intervention value distribution plot.")
                 return
 
             detailed_df = pd.read_csv(detailed_csv_path)
@@ -835,10 +964,10 @@ class BatchedInterventionExperiment:
             plt.grid(True, alpha=0.3)
             
             # Save plot
-            plt.savefig(os.path.join(self.output_dir, 'intervention_value_distribution.png'))
+            plt.savefig(os.path.join(self.entity_specific_output_dir, 'intervention_value_distribution.png'))
             plt.close()
             
-            print(f"Entity distribution plot saved to: {os.path.join(self.output_dir, 'intervention_value_distribution.png')}")
+            print(f"Entity distribution plot for {self.current_target_entity_name} saved to: {os.path.join(self.entity_specific_output_dir, 'intervention_value_distribution.png')}")
         except Exception as e:
             print(f"Warning: Could not generate entity distribution plot: {e}")
 
@@ -867,6 +996,10 @@ class BatchedInterventionExperiment:
 
         if pattern_to_set.shape != (self.maze_size, self.maze_size):
             raise ValueError(f"Pattern shape {pattern_to_set.shape} must be ({self.maze_size},{self.maze_size})")
+
+        # --- Find intended distractor coordinates from pattern ---
+        intended_distractor_coords_in_world = None
+        # -------------------------------------------------------
 
         # entity_mapping, maze_size, world_dim are available from self
 
@@ -917,13 +1050,24 @@ class BatchedInterventionExperiment:
                             if value_in_pattern == 2:  # Player placeholder in pattern
                                 player_world_pos = (world_grid_y, world_grid_x)
                             elif value_in_pattern in self.entity_mapping:
+                                # Check if this is our current target distractor
+                                if value_in_pattern == self.current_target_entity_code: # self is BatchedInterventionExperiment instance
+                                    intended_distractor_coords_in_world = (world_grid_y, world_grid_x)
+                                    # print(f"[DEBUG _generate_procgen_state_bytes_function] Intended distractor {self.current_target_entity_name} pos from pattern: ({world_grid_y}, {world_grid_x})")
+
                                 entity_data = self.entity_mapping[value_in_pattern]
                                 entity_type_code = heist.ENTITY_TYPES.get(entity_data["type"])
-                                entity_color_code = heist.ENTITY_COLORS.get(entity_data["color"]) if entity_data["color"] else None
+                                entity_color_code_from_mapping = heist.ENTITY_COLORS.get(entity_data["color"]) if entity_data["color"] else None
+                                
+                                # Default to theme 0 if color_code_from_mapping is None (e.g. for gems, player)
+                                final_entity_color_code_for_add_entity = 0
+                                if entity_color_code_from_mapping is not None:
+                                    final_entity_color_code_for_add_entity = entity_color_code_from_mapping
+
                                 if entity_type_code is not None:
                                     entities_to_place.append({
                                         "type_code": entity_type_code,
-                                        "color_code": entity_color_code,
+                                        "color_code": final_entity_color_code_for_add_entity, # Ensure this is 0 for None
                                         "position_world": (world_grid_y, world_grid_x)
                                     })
                     else:
@@ -945,21 +1089,168 @@ class BatchedInterventionExperiment:
 
 
             for entity_info in entities_to_place:
-                temp_state.set_entity_position(
+                # Use add_entity to create new entities, as remove_all_entities() was called.
+                # add_entity(self, entity_type, entity_theme, x_world_row, y_world_col)
+                temp_state.add_entity(
                     entity_info["type_code"],
-                    entity_info["color_code"],
-                    entity_info["position_world"][0],
-                    entity_info["position_world"][1]
+                    entity_info["color_code"], # This is the theme for add_entity
+                    entity_info["position_world"][0], # This is x (row) for add_entity
+                    entity_info["position_world"][1]  # This is y (col) for add_entity
                 )
             
-            return temp_state.state_bytes
+            return temp_state.state_bytes, intended_distractor_coords_in_world # Return both
         
         return actual_procgen_seq_fn
 
+# --- New Helper Functions for Combined Results (can be outside class or static) ---
+def save_experiment_data(summary_list_of_dicts, detailed_list_of_dicts, output_dir_root):
+    """Saves aggregated summary and detailed experiment data to CSV files."""
+    # Save summary results
+    if summary_list_of_dicts:
+        summary_df = pd.DataFrame(summary_list_of_dicts)
+        summary_csv_path = os.path.join(output_dir_root, 'summary_results_all_entities.csv')
+        summary_df.to_csv(summary_csv_path, index=False)
+        print(f"Saved combined summary results to {summary_csv_path}")
+    else:
+        print("No summary data to save for all entities.")
+
+    # Save detailed results
+    if detailed_list_of_dicts:
+        detailed_df = pd.DataFrame(detailed_list_of_dicts)
+        detailed_csv_path = os.path.join(output_dir_root, 'detailed_results_all_entities.csv')
+        detailed_df.to_csv(detailed_csv_path, index=False)
+        print(f"Saved combined detailed results to {detailed_csv_path}")
+    else:
+        print("No detailed data to save for all entities.")
+
+def generate_experiment_visualizations(summary_list_of_dicts, detailed_list_of_dicts, output_dir_root, args_for_plot):
+    """Generates and saves visualizations from aggregated experiment data."""
+    # Plot 1: Successful interventions by channel (faceted by entity or hue)
+    if summary_list_of_dicts:
+        summary_df = pd.DataFrame(summary_list_of_dicts)
+        if not summary_df.empty:
+            plt.figure(figsize=(max(15, summary_df['channel'].nunique() * 0.5), 7)) # Dynamic width
+            try:
+                sns.barplot(data=summary_df, x='channel', y='successful_interventions', hue='target_entity_name')
+                plt.title('Successful Interventions by Channel and Target Entity')
+                plt.xlabel('Channel Index')
+                plt.ylabel('Number of Successful Interventions')
+                plt.xticks(rotation=45, ha="right")
+                plt.tight_layout()
+                plot_path = os.path.join(output_dir_root, 'successful_interventions_by_channel_all_entities.png')
+                plt.savefig(plot_path)
+                plt.close()
+                print(f"Saved successful interventions plot to {plot_path}")
+            except Exception as e:
+                print(f"Error generating successful interventions plot: {e}")
+        else:
+            print("Summary DataFrame is empty, skipping successful interventions plot.")
+    else:
+        print("No summary data for successful interventions plot.")
+
+    # Plot 2: Distribution of intervention values for successful trials
+    if detailed_list_of_dicts:
+        detailed_df = pd.DataFrame(detailed_list_of_dicts)
+        if not detailed_df.empty and 'success' in detailed_df.columns and detailed_df['success'].astype(bool).any():
+            successful_trials_df = detailed_df[detailed_df['success'].astype(bool)].copy() # Ensure boolean indexing and copy
+            if not successful_trials_df.empty and 'intervention_value' in successful_trials_df.columns:
+                successful_trials_df['intervention_value'] = pd.to_numeric(successful_trials_df['intervention_value'], errors='coerce')
+                successful_trials_df.dropna(subset=['intervention_value'], inplace=True)
+
+                if not successful_trials_df.empty:
+                    plt.figure(figsize=(12, 6))
+                    try:
+                        # Using hue for entities. If too many entities, consider faceting or violin plot.
+                        sns.histplot(data=successful_trials_df, x='intervention_value', hue='target_entity_name',
+                                     bins=30, kde=True, multiple="stack") # "stack" or "dodge"
+                        plt.title('Distribution of Intervention Values for Successful Trials (All Entities)')
+                        plt.xlabel('Intervention Value')
+                        plt.ylabel('Count of Successful Trials')
+                        plt.grid(True, alpha=0.4)
+                        plt.tight_layout()
+                        plot_path = os.path.join(output_dir_root, 'intervention_value_distribution_all_entities.png')
+                        plt.savefig(plot_path)
+                        plt.close()
+                        print(f"Saved intervention value distribution plot to {plot_path}")
+                    except Exception as e:
+                        print(f"Error generating intervention value distribution plot: {e}")
+                else:
+                    print("No valid numeric 'intervention_value' data for successful trials after cleaning. Skipping distribution plot.")
+            else:
+                print("No 'intervention_value' column or no successful trials in combined detailed data for distribution plot.")
+        else:
+            print("No successful trials in combined detailed data for distribution plot.")
+    else:
+        print("No detailed data for intervention value distribution plot.")
+
+
 def main():
     args = parse_args()
-    experiment = BatchedInterventionExperiment(args)
-    experiment.run_experiments()
+    
+    # Ensure the base output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+    print(f"Base output directory: {args.output_dir}")
+
+    # Lists to aggregate results from all entities
+    all_entities_summary_metrics = [] # List of dicts (channel, successes, total_trials, entity_name, entity_code)
+    all_entities_detailed_trials = [] # List of dicts (trial details including entity_name, entity_code)
+
+    if not args.target_entities:
+        print("No target entities specified. Exiting.")
+        return
+
+    print(f"Starting experiments for target entities: {[ENTITY_CODE_DESCRIPTION.get(tc, tc) for tc in args.target_entities]}")
+
+    for entity_code in tqdm(args.target_entities, desc="Processing Entities"):
+        entity_name = ENTITY_CODE_DESCRIPTION.get(entity_code, f"entity_{entity_code}")
+        print(f"\n--- Running for Entity: {entity_name} (Code: {entity_code}) ---")
+        
+        # Each BatchedInterventionExperiment instance handles one entity
+        experiment = BatchedInterventionExperiment(args, entity_code)
+        
+        # run_experiments now returns results for the current entity
+        # This is a list of per-channel summary dicts, each containing 'detailed_trial_results'
+        results_for_current_entity = experiment.run_experiments() 
+        
+        # Aggregate results
+        for channel_summary_result in results_for_current_entity:
+            # Append to summary metrics list
+            all_entities_summary_metrics.append({
+                'target_entity_name': channel_summary_result['target_entity_name'],
+                'target_entity_code': channel_summary_result['target_entity_code'],
+                'channel': channel_summary_result['channel'],
+                'successful_interventions': channel_summary_result['successful_interventions'],
+                'total_trials': channel_summary_result['total_trials']
+            })
+            
+            # Extend detailed trials list
+            if 'detailed_trial_results' in channel_summary_result:
+                # detailed_trial_results should already contain entity_name and entity_code
+                all_entities_detailed_trials.extend(channel_summary_result['detailed_trial_results'])
+        
+        print(f"--- Finished processing for Entity: {entity_name} ---")
+
+    # After all entities are processed, save combined data into a single CSV
+    # compatible with plot_entity_distribution.py
+    if not all_entities_detailed_trials:
+        print("No results collected from any entity. Skipping final CSV save.")
+    else:
+        print("\n--- Aggregating and Saving All Trial Results ---")
+        all_trials_df = pd.DataFrame(all_entities_detailed_trials)
+
+        # Determine filename compatible with plot_entity_distribution.py
+        layer_name_for_file = args.layer_spec.replace(".", "_") if not args.is_sae else f"sae_layer_{args.layer_spec}"
+        intervention_type_for_file = "sae" if args.is_sae else "base"
+        # The plotting script picks the *first* matching quantitative_results_*.csv
+        # We will include layer and type in the name.
+        output_csv_filename = f"quantitative_results_{layer_name_for_file}_{intervention_type_for_file}.csv"
+        output_csv_path = os.path.join(args.output_dir, output_csv_filename)
+
+        all_trials_df.to_csv(output_csv_path, index=False)
+        print(f"Saved all detailed trial results to {output_csv_path}")
+        print(f"This file should be compatible with plot_entity_distribution.py if it's in the directory specified to that script.")
+
+    print("\nExperiment run completed.")
 
 if __name__ == "__main__":
     main() 
