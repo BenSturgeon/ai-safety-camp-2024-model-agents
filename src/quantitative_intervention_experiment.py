@@ -108,8 +108,8 @@ def parse_args():
                         help="Intervention position as 'y,x' (e.g., '2,1')")
     parser.add_argument("--intervention_radius", type=int, default=1,
                         help="Radius for the intervention patch (0 for single point)")
-    parser.add_argument("--start_channel", type=int, default=0,
-                        help="Starting channel index for the experiment loop (default: 0)")
+    parser.add_argument("--channels", type=str, default=None,
+                        help="Comma-separated list of specific channel indices to run (e.g., '0,10,20'). If None, all channels for the layer are run.")
 
     # Modified Intervention Value Argument
     parser.add_argument("--intervention_value", type=str, default="3.0",
@@ -136,6 +136,21 @@ def parse_args():
         args.intervention_position = (int(pos_parts[0]), int(pos_parts[1]))
     except Exception as e:
         parser.error(f"Invalid format for --intervention_position '{args.intervention_position}'. Use 'y,x' format (e.g., '2,1'). Error: {e}")
+
+    # Parse specified channels
+    if args.channels:
+        try:
+            args.channels = [int(ch.strip()) for ch in args.channels.split(',') if ch.strip()]
+            if not args.channels: # Ensure list is not empty after parsing
+                parser.error("If --channels is provided, it must result in a non-empty list of integers.")
+            # Further validation of channel numbers against num_channels will happen in main()
+            print(f"Running experiment for specific channels: {args.channels}")
+        except ValueError as e:
+            parser.error(f"Invalid format for --channels '{args.channels}'. Must be a comma-separated list of integers. Error: {e}")
+    else:
+        # If --channels is None, it signifies that all channels should be run.
+        # This will be handled in the main() function after num_channels is determined.
+        print("No specific channels provided via --channels. All channels for the layer will be processed.")
 
     # Parse intervention value (new logic)
     args.intervention_is_range = False
@@ -507,8 +522,24 @@ def main():
         raise RuntimeError("Internal error: layer_name was not set.")
     print(f"Layer '{layer_name}' has {num_channels} channels.")
 
+    # Determine channels to run
+    channels_to_run = []
+    if args.channels:
+        invalid_channels = [ch for ch in args.channels if not (0 <= ch < num_channels)]
+        if invalid_channels:
+            raise ValueError(f"Invalid channel(s) specified: {invalid_channels}. Channels must be between 0 and {num_channels - 1} for layer '{layer_name}'.")
+        channels_to_run = sorted(list(set(args.channels))) # Use sorted unique channels
+        print(f"Will run experiment for specified channels: {channels_to_run}")
+    else:
+        channels_to_run = list(range(num_channels)) # Run all channels from 0 to num_channels-1
+        print(f"Will run experiment for all {num_channels} channels in layer '{layer_name}'.")
+
+    if not channels_to_run:
+        print("Warning: No channels selected to run. Exiting.")
+        return # Exit if no channels are to be processed
+
     # Experiment Loop
-    total_experiments = len(args.target_entities) * (num_channels - args.start_channel) * args.num_trials
+    total_experiments = len(args.target_entities) * len(channels_to_run) * args.num_trials
     print(f"\nStarting experiment loops. Total simulations planned: {total_experiments}")
     first_trial_debug_gif_saved = False
 
@@ -548,107 +579,112 @@ def main():
         env_args = {"entity1": target_entity_code, "entity2": None}
 
         # Inner loop over channels
-        channel_loop_desc = f"Channels ({target_entity_name}) [{args.start_channel}-{num_channels-1}]"
-        for channel_index in tqdm(range(args.start_channel, num_channels), desc=channel_loop_desc, leave=False):
+        channel_loop_desc = f"Channels ({target_entity_name}) - {len(channels_to_run)} specified"
+        if not args.channels: # If running all channels, be more specific
+            channel_loop_desc = f"Channels ({target_entity_name}) [0-{num_channels-1}]"
 
-            # Intervention Trials Loop
-            for trial in range(args.num_trials):
+        for channel_index in tqdm(channels_to_run, desc=channel_loop_desc, leave=False):
+            venv_for_channel_trials = None # Initialize venv for this channel/entity combination
+            try:
+                # Create the environment once for all trials of this channel/entity
+                # This assumes create_box_maze sets up a consistent base environment,
+                # and run_simulation will call venv.reset() for each trial.
+                observations, venv_for_channel_trials = create_box_maze(**env_args)
 
-                # --- Determine Intervention Value ---
-                intervention_value = None
-                if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
-                    if args.num_trials > 1:
-                        step_size = (args.intervention_max - args.intervention_min) / (args.num_trials - 1)
-                        intervention_value = args.intervention_min + trial * step_size
-                    else: # Handle edge case of only 1 trial
-                        intervention_value = (args.intervention_min + args.intervention_max) / 2.0
-                elif hasattr(args, 'intervention_fixed_value'):
-                     intervention_value = args.intervention_fixed_value
-                else:
-                    # Fallback
-                    tqdm.write("[Warning] Could not determine intervention range/fixed value, using raw --intervention_value.")
-                    intervention_value = args.intervention_value
-                # --- End Intervention Value Determination ---
+                # Intervention Trials Loop
+                for trial in range(args.num_trials):
+                    # --- Determine Intervention Value ---
+                    intervention_value = None
+                    if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
+                        if args.num_trials > 1:
+                            step_size = (args.intervention_max - args.intervention_min) / (args.num_trials - 1)
+                            intervention_value = args.intervention_min + trial * step_size
+                        else: # Handle edge case of only 1 trial
+                            intervention_value = (args.intervention_min + args.intervention_max) / 2.0
+                    elif hasattr(args, 'intervention_fixed_value'):
+                         intervention_value = args.intervention_fixed_value
+                    else:
+                        # Fallback
+                        tqdm.write("[Warning] Could not determine intervention range/fixed value, using raw --intervention_value.")
+                        intervention_value = args.intervention_value
+                    # --- End Intervention Value Determination ---
 
-                # Determine if this is the very first trial overall (for saving GIF)
-                is_first_trial_for_gif = (
-                    not first_trial_debug_gif_saved and
-                    target_entity_code == args.target_entities[0] and
-                    channel_index == args.start_channel and
-                    trial == 0
-                )
+                    # Determine if this is the very first trial overall (for saving GIF)
+                    is_first_trial_for_gif = (
+                        not first_trial_debug_gif_saved and
+                        target_entity_code == args.target_entities[0] and
+                        channel_index == channels_to_run[0] and # Check against the first channel in the list
+                        trial == 0
+                    )
 
-                intervention_config = [{
-                    "channel": channel_index,
-                    "position": args.intervention_position,
-                    "value": intervention_value,
-                    "radius": args.intervention_radius,
-                }]
+                    intervention_config = [{
+                        "channel": channel_index,
+                        "position": args.intervention_position,
+                        "value": intervention_value,
+                        "radius": args.intervention_radius,
+                    }]
 
-                venv_trial = None # Initialize to prevent potential NameError in finally if create_box_maze *does* fail for other reasons
-                observations, venv_trial = create_box_maze(**env_args)
+                    # Note: venv_trial creation/closing is now outside this loop
 
-                trial_result = run_simulation(
-                    experiment=experiment,
-                    venv=venv_trial, # Use venv_trial defined above
-                    max_steps=args.max_steps,
-                    target_entity_code=target_entity_code,
-                    is_sae_run=args.is_sae,
-                    intervention_position=args.intervention_position,
-                    intervention_config=intervention_config,
-                    collect_frames=is_first_trial_for_gif,
-                    # Logging info
-                    intervention_reached_log_path=intervention_log_filename,
-                    current_channel_index=channel_index,
-                    current_intervention_value=intervention_value,
-                    current_trial_number=trial + 1,
-                    target_entity_name=target_entity_name
-                )
+                    trial_result = run_simulation(
+                        experiment=experiment,
+                        venv=venv_for_channel_trials, # Use venv_for_channel_trials defined for this channel/entity combination
+                        max_steps=args.max_steps,
+                        target_entity_code=target_entity_code,
+                        is_sae_run=args.is_sae,
+                        intervention_position=args.intervention_position,
+                        intervention_config=intervention_config,
+                        collect_frames=is_first_trial_for_gif,
+                        # Logging info
+                        intervention_reached_log_path=intervention_log_filename,
+                        current_channel_index=channel_index,
+                        current_intervention_value=intervention_value,
+                        current_trial_number=trial + 1,
+                        target_entity_name=target_entity_name
+                    )
 
-                # Keep finally block to close the environment
-                try:
-                    pass
-                finally:
-                     # Ensure venv_trial exists before closing
-                     if venv_trial is not None:
-                         venv_trial.close()
+                    # Note: The try/finally for venv_trial.close() has been moved outside this loop
 
-                # Save Debug GIF
-                if is_first_trial_for_gif and trial_result.get("frames"):
-                    try:
-                         safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
-                         # Entity-specific directory
-                         debug_gif_dir = os.path.join(args.output_dir, safe_layer_name, target_entity_name)
-                         os.makedirs(debug_gif_dir, exist_ok=True)
-                         # Construct filename
-                         gif_filename = os.path.join(debug_gif_dir, f"debug_gif_ch{channel_index}_trial{trial+1}_pos{args.intervention_position[0]}_{args.intervention_position[1]}.gif")
-                         imageio.mimsave(gif_filename, trial_result["frames"], fps=10)
-                         tqdm.write(f"    Saved debug GIF for first trial to {gif_filename}")
-                         first_trial_debug_gif_saved = True
-                    except Exception as e_gif:
-                         tqdm.write(f"    Error saving debug GIF: {e_gif}")
+                    # Save Debug GIF
+                    if is_first_trial_for_gif and trial_result.get("frames"):
+                        try:
+                             safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
+                             # Entity-specific directory
+                             debug_gif_dir = os.path.join(args.output_dir, safe_layer_name, target_entity_name)
+                             os.makedirs(debug_gif_dir, exist_ok=True)
+                             # Construct filename
+                             gif_filename = os.path.join(debug_gif_dir, f"debug_gif_ch{channel_index}_trial{trial+1}_pos{args.intervention_position[0]}_{args.intervention_position[1]}.gif")
+                             imageio.mimsave(gif_filename, trial_result["frames"], fps=10)
+                             tqdm.write(f"    Saved debug GIF for first trial to {gif_filename}")
+                             first_trial_debug_gif_saved = True
+                        except Exception as e_gif:
+                             tqdm.write(f"    Error saving debug GIF: {e_gif}")
 
 
-                # Record result
-                results.append({
-                    "layer_name": layer_name,
-                    "layer_is_sae": args.is_sae,
-                    "sae_layer_number": layer_number if args.is_sae else None,
-                    "channel": channel_index,
-                    "trial": trial + 1,
-                    "target_entity_code": target_entity_code,
-                    "target_entity_name": target_entity_name,
-                    "outcome": trial_result.get("outcome", "error"),
-                    "target_acquired": trial_result.get("target_acquired", True),
-                    "initial_target_pos_y": trial_result.get("initial_target_pos")[0] if trial_result.get("initial_target_pos") else -1,
-                    "initial_target_pos_x": trial_result.get("initial_target_pos")[1] if trial_result.get("initial_target_pos") else -1,
-                    "final_player_pos_y": trial_result.get("final_player_pos")[0] if trial_result.get("final_player_pos") else -1,
-                    "final_player_pos_x": trial_result.get("final_player_pos")[1] if trial_result.get("final_player_pos") else -1,
-                    "intervention_value": intervention_value,
-                    "intervention_radius": args.intervention_radius,
-                    "intervention_pos_y": args.intervention_position[0],
-                    "intervention_pos_x": args.intervention_position[1],
-                })
+                    # Record result
+                    results.append({
+                        "layer_name": layer_name,
+                        "layer_is_sae": args.is_sae,
+                        "sae_layer_number": layer_number if args.is_sae else None,
+                        "channel": channel_index,
+                        "trial": trial + 1,
+                        "target_entity_code": target_entity_code,
+                        "target_entity_name": target_entity_name,
+                        "outcome": trial_result.get("outcome", "error"),
+                        "target_acquired": trial_result.get("target_acquired", True),
+                        "initial_target_pos_y": trial_result.get("initial_target_pos")[0] if trial_result.get("initial_target_pos") else -1,
+                        "initial_target_pos_x": trial_result.get("initial_target_pos")[1] if trial_result.get("initial_target_pos") else -1,
+                        "final_player_pos_y": trial_result.get("final_player_pos")[0] if trial_result.get("final_player_pos") else -1,
+                        "final_player_pos_x": trial_result.get("final_player_pos")[1] if trial_result.get("final_player_pos") else -1,
+                        "intervention_value": intervention_value,
+                        "intervention_radius": args.intervention_radius,
+                        "intervention_pos_y": args.intervention_position[0],
+                        "intervention_pos_x": args.intervention_position[1],
+                    })
+            finally:
+                # Ensure venv_for_channel_trials is closed after all trials for this channel/entity are done
+                if venv_for_channel_trials is not None:
+                    venv_for_channel_trials.close()
 
 
     # Save Results
