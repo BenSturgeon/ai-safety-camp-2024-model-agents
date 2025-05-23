@@ -356,7 +356,7 @@ class EnvState:
 
     @property
     def state_vals(self):
-        return _parse_maze_state_bytes(self.state_bytes)
+        return _parse_maze_state_bytes_handling_buffer_error(self.state_bytes)
 
     @property
     def world_dim(self):
@@ -691,6 +691,44 @@ class EnvState:
                     if ents["x"].val >= 0 and ents["y"].val >= 0:
                         count += 1
         return count
+
+    def get_entities(self, on_screen_only: bool = True) -> List[Dict[str, StateValue]]:
+        """
+        Returns a list of all entities in the current state.
+        Each entity is a dictionary of its properties (StateValue objects).
+        By default, only returns entities that are on-screen (x.val >= 0 and y.val >= 0, and not NaN).
+        """
+        all_raw_entities = self.state_vals.get("ents")
+        if not all_raw_entities:
+            return []
+
+        if not on_screen_only:
+            return all_raw_entities # Return all entities as they are
+
+        # Filter for on-screen entities
+        on_screen_entities: List[Dict[str, StateValue]] = []
+        for entity_data in all_raw_entities:
+            x_state_value = entity_data.get("x")
+            y_state_value = entity_data.get("y")
+
+            x_val = float('nan')
+            y_val = float('nan')
+
+            if x_state_value is not None:
+                x_val = x_state_value.val
+            if y_state_value is not None:
+                y_val = y_state_value.val
+            
+            is_valid_and_on_screen = (
+                not math.isnan(x_val) and \
+                not math.isnan(y_val) and \
+                x_val >= 0 and \
+                y_val >= 0
+            )
+            
+            if is_valid_and_on_screen:
+                on_screen_entities.append(entity_data)
+        return on_screen_entities
     
 
 
@@ -721,66 +759,6 @@ def get_gem_pos(grid: np.ndarray, flip_y: bool = False) -> Square:
     row, col = np.where(grid == GEM)
     row, col = row[0], col[0]
     return ((WORLD_DIM - 1) - row if flip_y else row), col
-
-def get_lock_positions(state_vals):
-    lock_positions = []
-    for ents in state_vals["ents"]:
-        if ents["image_type"].val == 1:  # Check if the entity is a lock
-            lock_positions.append((ents["x"].val, ents["y"].val))
-
-    return lock_positions
-
-def get_key_position(state_vals, key_index):
-    for ents in state_vals["ents"]:
-            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
-                return (ents["x"].val, ents["y"].val)
-    raise ValueError("Key not found")
-
-
-def get_key_positions(state_vals):
-    key_positions = []
-    for ents in state_vals["ents"]:
-        if ents["image_type"].val == 2:  # Check if the entity is a key
-            key_positions.append((ents["x"].val, ents["y"].val))
-
-    return key_positions
-    
-def get_lock_positions(state_vals):
-    lock_positions = []
-    for ents in state_vals["ents"]:
-        if ents["image_type"].val == 1:  # Check if the entity is a lock
-            lock_positions.append((ents["x"].val, ents["y"].val))
-
-    return lock_positions
-
-def get_key_position(state_vals, key_index):
-    for ents in state_vals["ents"]:
-            if ents["image_type"].val == 2 and ents["image_theme"].val == key_index:
-                return (ents["x"].val, ents["y"].val)
-    raise ValueError("Key not found")
-
-
-def get_key_positions(state_vals):
-    key_positions = []
-    for ents in state_vals["ents"]:
-        if ents["image_type"].val == 2:  # Check if the entity is a key
-            key_positions.append((ents["x"].val, ents["y"].val))
-
-    return key_positions
-
-
-
-def get_lock_statuses(state_vals):
-    lock_statuses = []
-    for ents in state_vals["ents"]:
-        if ents["image_type"].val == 1:  # Check if the entity is a lock
-            lock_statuses.append(ents)
-    return lock_statuses
-    
-    
-
-
-            
 
 def get_mouse_pos_sv(state_vals: StateValues) -> Square:
     """Get the mouse position from state_vals"""
@@ -872,7 +850,8 @@ def _parse_maze_state_bytes(state_bytes: bytes, assert_=DEBUG) -> StateValues:
     for val_def in HEIST_STATE_DICT_TEMPLATE:
         idx = parse_value(vals, val_def, idx)
 
-
+    if idx != len(state_bytes):
+        print(f"[heist.py WARNING] _parse_maze_state_bytes: Final index {idx} does not match state_bytes length {len(state_bytes)}. Potential corruption or incomplete parse.")
     if assert_:
         assert (
             _serialize_maze_state(vals, assert_=False) == state_bytes
@@ -985,7 +964,7 @@ def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
 
     if assert_:
         assert (
-            _parse_maze_state_bytes(state_bytes, assert_=False) == state_vals
+            _parse_maze_state_bytes_handling_buffer_error(state_bytes, assert_=False) == state_vals
         ), "deserialize(serialize(state_vals)) != state_vals"
     return state_bytes
 
