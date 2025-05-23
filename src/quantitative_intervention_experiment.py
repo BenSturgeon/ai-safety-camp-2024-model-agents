@@ -20,7 +20,7 @@ from utils import heist
 # Project imports
 from base_model_intervention import BaseModelInterventionExperiment
 from sae_spatial_intervention import SAEInterventionExperiment, ordered_layer_names
-from utils.environment_modification_experiments import create_box_maze
+from utils.create_intervention_mazes import create_box_maze
 from utils import helpers
 
 # Constants
@@ -102,18 +102,18 @@ def parse_args():
                         help="Comma-separated list of entity names to target (e.g., 'gem,blue_key')")
     parser.add_argument("--num_trials", type=int, default=10,
                         help="Number of trials per channel")
-    parser.add_argument("--max_steps", type=int, default=50,
+    parser.add_argument("--max_steps", type=int, default=20,
                         help="Maximum number of steps per trial simulation")
-    parser.add_argument("--intervention_position", type=str, default="2,1",
-                        help="Intervention position as 'y,x' (e.g., '2,1')")
+    parser.add_argument("--intervention_position", type=str, default=None,
+                        help="Intervention position as 'y,x' (e.g., '2,1'). Defaults: '4,6' for conv4a (or SAE layer 8), '8,12' for conv3a (or SAE layer 6), otherwise '4,6'.")
     parser.add_argument("--intervention_radius", type=int, default=1,
                         help="Radius for the intervention patch (0 for single point)")
     parser.add_argument("--channels", type=str, default=None,
                         help="Comma-separated list of specific channel indices to run (e.g., '0,10,20'). If None, all channels for the layer are run.")
 
     # Modified Intervention Value Argument
-    parser.add_argument("--intervention_value", type=str, default="3.0",
-                        help="Intervention value. Either a fixed float (e.g., '3.0') or a range 'min,max' (e.g., '0.2,2.0') to iterate over trials.")
+    parser.add_argument("--intervention_value", type=str, default="0,3",
+                        help="Intervention value. Either a fixed float (e.g., '3.0') or a range 'min,max' (e.g., '0,3') to iterate over trials.")
 
     # Output Configuration
     parser.add_argument("--output_dir", type=str, default="quantitative_intervention_results",
@@ -123,19 +123,51 @@ def parse_args():
 
     args = parser.parse_args()
 
+    # --- Conditional default for intervention_position ---
+    if args.intervention_position is None:
+        default_intervention_position_str = "4,6" # Fallback default
+
+        layer_spec_for_check = args.layer_spec
+        is_sae_for_check = args.is_sae
+        layer_number_for_check = None
+        layer_name_for_check = None
+
+        if is_sae_for_check:
+            try:
+                layer_number_for_check = int(layer_spec_for_check)
+            except ValueError:
+                # Error will be handled later if layer_spec is truly invalid for SAE
+                pass
+        else:
+            layer_name_for_check = layer_spec_for_check
+
+        # Apply conditional defaults
+        if (is_sae_for_check and layer_number_for_check == 8) or \
+           (not is_sae_for_check and layer_name_for_check == 'conv4a'):
+            args.intervention_position = "4,6"
+            print(f"No intervention_position specified by user. Defaulting to '4,6' for layer {layer_spec_for_check}.")
+        elif (is_sae_for_check and layer_number_for_check == 6) or \
+             (not is_sae_for_check and layer_name_for_check == 'conv3a'):
+            args.intervention_position = "8,12"
+            print(f"No intervention_position specified by user. Defaulting to '8,12' for layer {layer_spec_for_check}.")
+        else:
+            args.intervention_position = default_intervention_position_str
+            print(f"No intervention_position specified by user. Defaulting to '{default_intervention_position_str}' for layer {layer_spec_for_check} (standard fallback).")
+    # --- End conditional default ---
+
+    # Parse intervention position string (whether user-supplied or defaulted) to a tuple
+    try:
+        pos_parts = args.intervention_position.split(',')
+        if len(pos_parts) != 2:
+            raise ValueError("Position must have two parts separated by a comma.")
+        args.intervention_position = (int(pos_parts[0]), int(pos_parts[1])) # (y, x)
+    except Exception as e:
+        parser.error(f"Invalid format for --intervention_position '{args.intervention_position}'. Use 'y,x' format (e.g., '4,6'). Error: {e}")
+
     # Process target entities
     args.target_entities = [ENTITY_DESCRIPTION_CODE[name.strip()] for name in args.target_entities.split(',') if name.strip() in ENTITY_DESCRIPTION_CODE]
     if not args.target_entities:
         parser.error("No valid target entities specified.")
-
-    # Parse intervention position
-    try:
-        pos_parts = args.intervention_position.split(',')
-        if len(pos_parts) != 2:
-             raise ValueError("Position must have two parts")
-        args.intervention_position = (int(pos_parts[0]), int(pos_parts[1]))
-    except Exception as e:
-        parser.error(f"Invalid format for --intervention_position '{args.intervention_position}'. Use 'y,x' format (e.g., '2,1'). Error: {e}")
 
     # Parse specified channels
     if args.channels:
@@ -184,7 +216,7 @@ def parse_args():
     return args
 
 
-def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, intervention_position, intervention_config=None, collect_frames=False, intervention_reached_log_path=None, current_channel_index=None, current_intervention_value=None, current_trial_number=None, target_entity_name=None):
+def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, intervention_position, intervention_config=None, collect_frames=False, intervention_reached_log_path=None, current_channel_index=None, current_intervention_value=None, current_trial_number=None, target_entity_name=None, output_dir_for_debug=None):
     """
     Runs a single simulation episode, optionally applying an intervention and/or collecting activations/frames.
 
@@ -202,6 +234,7 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         current_intervention_value (float, optional): The intervention value used in this trial.
         current_trial_number (int, optional): The current trial number for this channel/entity.
         target_entity_name (str, optional): The name of the target entity.
+        output_dir_for_debug (str, optional): Directory to save debug frames if a target entity is not found.
 
     Returns:
         dict: Contains 'final_player_pos', 'outcome', 'target_acquired', 'initial_target_pos'
@@ -271,7 +304,61 @@ def run_simulation(experiment, venv, max_steps, target_entity_code, is_sae_run, 
         initial_target_pos = state.get_entity_position(target_type, target_color)
 
         if initial_target_pos is None:
-            print(f"\nWarning: Target entity {ENTITY_CODE_DESCRIPTION.get(target_entity_code, 'Unknown')} (Type {target_type}, Theme {target_color}) not found in initial state.")
+            warning_msg = f"\nWarning: Target entity {ENTITY_CODE_DESCRIPTION.get(target_entity_code, 'Unknown')} (Type {target_type}, Theme {target_color}) not found in initial state."
+            print(warning_msg)
+            tqdm.write(warning_msg) # Ensure it also appears in tqdm output if running in a loop
+
+            if output_dir_for_debug:
+                try:
+                    debug_frames_dir = os.path.join(output_dir_for_debug, "debug_missing_entity_frames")
+                    os.makedirs(debug_frames_dir, exist_ok=True)
+                    
+                    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    entity_str = target_entity_name.replace(" ", "_") if target_entity_name else "unknown_entity"
+                    channel_str = f"ch{current_channel_index}" if current_channel_index is not None else "nochannel"
+                    trial_str = f"trial{current_trial_number}" if current_trial_number is not None else "notrial"
+                    
+                    filename = f"missing_observation_{entity_str}_{channel_str}_{trial_str}_{timestamp_str}.png"
+                    filepath = os.path.join(debug_frames_dir, filename)
+                    
+                    # Extract the agent's observation for saving
+                    agent_obs_frame = None
+                    if isinstance(observation, tuple) and len(observation) > 0 and isinstance(observation[0], dict) and 'rgb' in observation[0]:
+                        agent_obs_frame = observation[0]['rgb']
+                    elif isinstance(observation, dict) and 'rgb' in observation:
+                        agent_obs_frame = observation['rgb']
+                    elif isinstance(observation, np.ndarray) and observation.ndim == 3 and observation.shape[2] == 3:
+                        # Assuming it's already in a suitable HWC format if it's a raw NumPy array like this
+                        agent_obs_frame = observation
+                    else:
+                        tqdm.write(f"    Could not determine agent observation format for debug image saving. Type: {type(observation)}")
+
+                    if agent_obs_frame is not None:
+                        # Ensure it's uint8 for image saving if it's float
+                        if agent_obs_frame.dtype == np.float32 or agent_obs_frame.dtype == np.float64:
+                            if np.max(agent_obs_frame) <= 1.0: # Assuming 0-1 range for float
+                                agent_obs_frame = (agent_obs_frame * 255).astype(np.uint8)
+                            else: # Assuming 0-255 range for float, just cast
+                                agent_obs_frame = agent_obs_frame.astype(np.uint8)
+                        elif agent_obs_frame.dtype != np.uint8:
+                             # If it's some other type, try to convert, might fail or be incorrect
+                            agent_obs_frame = agent_obs_frame.astype(np.uint8)
+                            
+                        imageio.imwrite(filepath, agent_obs_frame)
+                        print(f"    Saved debug agent observation for missing entity to: {filepath}")
+                        tqdm.write(f"    Saved debug agent observation for missing entity to: {filepath}")
+                    else:
+                        # Fallback to render if specific observation extraction fails
+                        tqdm.write(f"    Falling back to venv.render() for debug image as agent observation was not extracted.")
+                        current_frame = venv.render("rgb_array")
+                        imageio.imwrite(filepath.replace("missing_observation_", "missing_render_"), current_frame)
+                        print(f"    Saved debug render for missing entity to: {filepath.replace('missing_observation_', 'missing_render_')}")
+                        tqdm.write(f"    Saved debug render for missing entity to: {filepath.replace('missing_observation_', 'missing_render_')}")
+
+                except Exception as e_debug_save:
+                    err_msg = f"    Error saving debug frame: {e_debug_save}"
+                    print(err_msg)
+                    tqdm.write(err_msg)
 
         # Store integer grid positions for comparison
         initial_target_grid_pos = (int(initial_target_pos[0]), int(initial_target_pos[1])) if initial_target_pos else None
@@ -575,7 +662,7 @@ def main():
         target_entity_name = ENTITY_CODE_DESCRIPTION[target_entity_code]
         tqdm.write(f"\n--- Target Entity: {target_entity_name} ({target_entity_code}) ---")
 
-        # Create the maze with only the target entity
+        # Env_args remains the same for all trials of this entity
         env_args = {"entity1": target_entity_code, "entity2": None}
 
         # Inner loop over channels
@@ -584,15 +671,18 @@ def main():
             channel_loop_desc = f"Channels ({target_entity_name}) [0-{num_channels-1}]"
 
         for channel_index in tqdm(channels_to_run, desc=channel_loop_desc, leave=False):
-            venv_for_channel_trials = None # Initialize venv for this channel/entity combination
-            try:
-                # Create the environment once for all trials of this channel/entity
-                # This assumes create_box_maze sets up a consistent base environment,
-                # and run_simulation will call venv.reset() for each trial.
-                observations, venv_for_channel_trials = create_box_maze(**env_args)
+            # Venv creation is now INSIDE the trial loop
+            # try/finally for venv closing will also be inside the trial loop
 
-                # Intervention Trials Loop
-                for trial in range(args.num_trials):
+            # Intervention Trials Loop
+            for trial in range(args.num_trials):
+                venv_for_this_trial = None # Initialize venv for this specific trial
+                try:
+                    # Create the environment FOR EACH TRIAL to get new seed sampling
+                    # This assumes create_box_maze (and thus create_custom_maze_sequence)
+                    # will now sample a new seed from the loaded list internally.
+                    observations, venv_for_this_trial = create_box_maze(**env_args)
+
                     # --- Determine Intervention Value ---
                     intervention_value = None
                     if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
@@ -624,11 +714,9 @@ def main():
                         "radius": args.intervention_radius,
                     }]
 
-                    # Note: venv_trial creation/closing is now outside this loop
-
                     trial_result = run_simulation(
                         experiment=experiment,
-                        venv=venv_for_channel_trials, # Use venv_for_channel_trials defined for this channel/entity combination
+                        venv=venv_for_this_trial, # Use venv_for_this_trial
                         max_steps=args.max_steps,
                         target_entity_code=target_entity_code,
                         is_sae_run=args.is_sae,
@@ -640,12 +728,12 @@ def main():
                         current_channel_index=channel_index,
                         current_intervention_value=intervention_value,
                         current_trial_number=trial + 1,
-                        target_entity_name=target_entity_name
+                        target_entity_name=target_entity_name,
+                        output_dir_for_debug=args.output_dir # Pass output_dir for debug saving
                     )
 
-                    # Note: The try/finally for venv_trial.close() has been moved outside this loop
-
-                    # Save Debug GIF
+                    # Save Debug GIF (logic for is_first_trial_for_gif might need review if mazes change per trial)
+                    # For now, it will save the GIF of the first trial of the first channel of the first entity.
                     if is_first_trial_for_gif and trial_result.get("frames"):
                         try:
                              safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
@@ -681,10 +769,10 @@ def main():
                         "intervention_pos_y": args.intervention_position[0],
                         "intervention_pos_x": args.intervention_position[1],
                     })
-            finally:
-                # Ensure venv_for_channel_trials is closed after all trials for this channel/entity are done
-                if venv_for_channel_trials is not None:
-                    venv_for_channel_trials.close()
+                finally:
+                    # Ensure venv_for_this_trial is closed after this specific trial is done
+                    if venv_for_this_trial is not None:
+                        venv_for_this_trial.close()
 
 
     # Save Results
