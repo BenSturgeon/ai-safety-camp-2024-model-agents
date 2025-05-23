@@ -4,7 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import imageio
-from utils.environment_modification_experiments import create_box_maze
+from utils.create_intervention_mazes import create_box_maze
 from utils import helpers
 
 
