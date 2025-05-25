@@ -17,7 +17,7 @@ from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 # import matplotlib.pyplot as plt
 
 # Keep environment creation if needed later, but heist.create_venv used now
-from src.utils.environment_modification_experiments import create_trident_maze, create_passages_box_maze
+from src.utils.create_intervention_mazes import create_trident_maze, create_passages_box_maze
 
 from utils.helpers import run_episode_and_get_final_state
 from utils.heist import (
