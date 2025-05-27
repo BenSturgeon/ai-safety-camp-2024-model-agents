@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument("--num_trials", type=int, default=default_num_trials, help="Number of trials per channel.")
     parser.add_argument("--max_steps", type=int, default=default_max_steps, help="Maximum steps per episode.")
     parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Base directory to save results CSVs and GIFs.")
-    parser.add_argument("--save_gifs", action="store_true", help="Save a GIF for the first trial of each channel (within each process).")
+    parser.add_argument("--no_save_gifs", action="store_true", help="Disable saving a GIF for the first trial of each channel (within each process).")
 
     # Arguments specific to the parallel runner
     parser.add_argument("--num_processes", type=int, default=min(16, cpu_count()), help="Number of parallel processes to launch.")
@@ -94,15 +94,18 @@ def run_worker(worker_args):
     if common_args.is_sae_run:
         command.extend(["--sae_checkpoint_path", common_args.sae_checkpoint_path])
         
-    if common_args.save_gifs:
-        command.append("--save_gifs")
+    if common_args.no_save_gifs:
+        command.append("--no_save_gifs")
+
+    # Prevent worker scripts from all trying to save the same debug GIF
+    # command.append("--no_debug_gif")
 
     print(f"[Process {process_id}] Running channels {start_channel}-{end_channel-1}...")
     print(f"[Process {process_id}] Command: {' '.join(command)}")
 
     try:
         # Run the subprocess, capturing output for error diagnosis
-        result = subprocess.run(command, check=True, text=True, capture_output=True)
+        result = subprocess.run(command, check=True, text=True)
         print(f"[Process {process_id}] Completed successfully.")
         # Optional debug print
         # print(f"[Process {process_id} STDOUT]:\n{result.stdout}") # No longer captured if capture_output is False
@@ -112,8 +115,7 @@ def run_worker(worker_args):
         print(f"  Command: {' '.join(e.cmd)}")
         print(f"  Return Code: {e.returncode}")
         # Stderr might still be available on the exception object even if not captured by default
-        print(f"  Stdout:\n{e.stdout}")
-        print(f"  Stderr:\n{e.stderr}") 
+        print(f"  Stderr: {e.stderr}") 
     except Exception as e:
          print(f"[Process {process_id}] FAILED with unexpected error: {e}")
 
