@@ -10,7 +10,7 @@ import datetime
 # --- Defaults ---
 default_model_path = "../model_interpretable.pt"
 default_output_dir = "channel_ablation_results_parallel"
-default_max_steps = 300
+default_max_steps = 100
 default_num_trials = 5
 # Cannot easily default total_channels anymore, must be provided if base layer
 # ---
@@ -74,6 +74,19 @@ def parse_args():
 
     return args
 
+def save_run_arguments(args_obj, output_dir):
+    """Saves the run arguments to a text file in the output directory."""
+    args_file_path = os.path.join(output_dir, "parallel_run_arguments.txt")
+    try:
+        with open(args_file_path, 'w') as f:
+            f.write(f"Run Timestamp: {datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}\n")
+            f.write("Command Line Arguments Used for Parallel Run:\n")
+            for arg, value in sorted(vars(args_obj).items()): # Sort for consistent order
+                f.write(f"  --{arg}: {value}\n")
+        print(f"Saved parallel run arguments to: {args_file_path}")
+    except Exception as e:
+        print(f"Error saving run arguments: {e}")
+
 def run_worker(worker_args):
     """Function to be executed by each process."""
     process_id, start_channel, end_channel, common_args = worker_args
@@ -85,20 +98,25 @@ def run_worker(worker_args):
         "--layer_spec", common_args.layer_spec, # Pass layer_spec
         "--num_trials", str(common_args.num_trials),
         "--max_steps", str(common_args.max_steps),
-        "--output_dir", common_args.output_dir, 
+        "--output_dir", common_args.output_dir,
         "--start_channel", str(start_channel),
         "--end_channel", str(end_channel),
-        # Note: We don't pass --total_channels to the worker, it figures it out
     ]
-    # Conditionally add SAE path
+
+    # Conditionally add SAE path or total_channels_for_base_layer
     if common_args.is_sae_run:
-        command.extend(["--sae_checkpoint_path", common_args.sae_checkpoint_path])
-        
+        if common_args.sae_checkpoint_path: # Should always be true if is_sae_run
+            command.extend(["--sae_checkpoint_path", common_args.sae_checkpoint_path])
+        else:
+            # This case should ideally be prevented by argument parsing in the main script
+            print(f"[Process {process_id}] Error: SAE run indicated but no SAE checkpoint path provided to parallel runner.")
+            return # Or raise an error
+    else: # Base model run
+        # common_args.total_channels is required by the parallel script's arg parser
+        command.extend(["--total_channels_for_base_layer", str(common_args.total_channels)])
+
     if common_args.no_save_gifs:
         command.append("--no_save_gifs")
-
-    # Prevent worker scripts from all trying to save the same debug GIF
-    # command.append("--no_debug_gif")
 
     print(f"[Process {process_id}] Running channels {start_channel}-{end_channel-1}...")
     print(f"[Process {process_id}] Command: {' '.join(command)}")
@@ -121,6 +139,9 @@ def run_worker(worker_args):
 
 def main():
     args = parse_args()
+
+    # Save the arguments after output_dir is finalized in parse_args
+    save_run_arguments(args, args.output_dir)
 
     num_processes = args.num_processes
     total_channels = args.total_channels # Now required arg

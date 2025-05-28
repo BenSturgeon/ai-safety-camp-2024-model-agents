@@ -48,11 +48,11 @@ COLOR_IDX_TO_ENTITY_NAME = {
 # This will be updated in the main loop for each channel
 FEATURES_TO_ZERO = []
 # Need global references to sae and device for the hook
-sae = None
+sae = None # sae can be None if it's a base model ablation
 model = None
 # ---
 
-# --- Hook Definition ---
+# --- Hook Definition for SAE ---
 # Define activation hook (needs access to global FEATURES_TO_ZERO, sae, device)
 def hook_sae_activations(module, input, output):
     global FEATURES_TO_ZERO, sae, device # Access globals
@@ -95,7 +95,29 @@ def hook_sae_activations(module, input, output):
              return output # Return original if reshape fails
 
     return reconstructed_output
-# --- End Hook Definition ---
+# --- End Hook Definition for SAE ---
+
+# --- New Hook Definition for Base Model Channel Ablation ---
+def hook_base_channel_ablation(module, input, output):
+    global FEATURES_TO_ZERO, device # Access globals
+
+    with torch.no_grad():
+        output_tensor = output.to(device)
+        modified_output = output_tensor.clone()
+
+        if FEATURES_TO_ZERO:
+            num_output_channels = modified_output.shape[1] # Assumes B, C, H, W
+            # Ensure FEATURES_TO_ZERO contains valid indices
+            valid_indices = [idx for idx in FEATURES_TO_ZERO if 0 <= idx < num_output_channels]
+            if valid_indices:
+                modified_output[:, valid_indices, :, :] = 0.0
+            # Optional: Add warning for invalid indices
+            # if len(valid_indices) != len(FEATURES_TO_ZERO):
+            #      print(f"Warning: Invalid/out-of-range feature indices encountered for base layer ablation.")
+
+        # No decoding needed, return modified activations directly
+        return modified_output
+# --- End New Hook Definition ---
 
 
 # --- Helper Functions ---
@@ -122,25 +144,31 @@ def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Run channel ablation sweep experiment.")
     parser.add_argument("--model_path", type=str, default="../model_interpretable.pt", help="Path to the base interpretable model.")
-    parser.add_argument("--sae_checkpoint_path", type=str, required=True, help="Path to the SAE checkpoint (.pt file).")
-    parser.add_argument("--layer_spec", type=str, required=True, help="SAE layer number (e.g., '8') or layer name (e.g., 'conv4a'). Must be in ordered_layer_names.")
+    parser.add_argument("--sae_checkpoint_path", type=str, default=None, required=False, help="Path to the SAE checkpoint (.pt file). If None, runs base model layer ablation.")
+    parser.add_argument("--layer_spec", type=str, required=True, help="SAE layer number (e.g., '8') or layer name (e.g., 'conv4a') if SAE run. Direct model layer name (e.g., 'encoder.conv0') if base model run.")
     parser.add_argument("--num_trials", type=int, default=5, help="Number of trials per channel.")
     parser.add_argument("--max_steps", type=int, default=300, help="Maximum steps per episode.")
     parser.add_argument("--output_dir", type=str, default="channel_ablation_results", help="Directory to save results CSV.")
     parser.add_argument("--start_channel", type=int, default=0, help="Starting channel index (inclusive).")
-    parser.add_argument("--end_channel", type=int, default=None, help="Ending channel index (exclusive). If None, runs all channels.")
+    parser.add_argument("--end_channel", type=int, default=None, help="Ending channel index (exclusive). If None, runs all channels specified by SAE or total_channels_for_base_layer.")
     parser.add_argument("--no_save_gifs", action="store_true", help="Disable saving a GIF for the first trial of each channel.")
+    parser.add_argument("--total_channels_for_base_layer", type=int, default=None, help="Total channels in the base model layer, REQUIRED if not an SAE run (i.e., sae_checkpoint_path is not provided).")
 
     args = parser.parse_args()
 
+    args.is_sae_run = args.sae_checkpoint_path is not None
 
     if not os.path.exists(args.model_path):
          parser.error(f"Model path not found: {args.model_path}")
-    if not os.path.exists(args.sae_checkpoint_path):
-         parser.error(f"SAE checkpoint path not found: {args.sae_checkpoint_path}")
+    if args.is_sae_run and not os.path.exists(args.sae_checkpoint_path):
+         parser.error(f"SAE checkpoint path specified but not found: {args.sae_checkpoint_path}")
+    if not args.is_sae_run and args.total_channels_for_base_layer is None:
+        parser.error("--total_channels_for_base_layer is required when --sae_checkpoint_path is not provided.")
+    if not args.is_sae_run and args.total_channels_for_base_layer is not None and args.total_channels_for_base_layer <= 0:
+        parser.error("--total_channels_for_base_layer must be positive.")
 
     # --- Resolve layer_spec ---
-    actual_layer_number = None
+    actual_layer_number = None # Primarily for SAE runs for naming/reference
     actual_layer_name = None
     spec_input = args.layer_spec
 
@@ -163,12 +191,11 @@ def parse_args():
         else:
             parser.error(f"Invalid layer name specified: '{spec_input}'. Valid string options are: {list(ordered_layer_names.values())}")
 
-    if actual_layer_number is None or actual_layer_name is None:
-        # This case should ideally be caught by the specific errors above, but as a fallback:
-        parser.error(f"Could not resolve layer_spec '{spec_input}'. Valid numbers: {list(ordered_layer_names.keys())}, Valid names: {list(ordered_layer_names.values())}")
+    if actual_layer_name is None: # Fallback, should be set by logic above.
+        parser.error(f"Could not resolve layer_spec '{spec_input}' to a layer name.")
 
-    args.actual_layer_number = actual_layer_number
-    args.actual_layer_name = actual_layer_name
+    args.actual_layer_number = actual_layer_number # This will be None for base model runs
+    args.actual_layer_name = actual_layer_name     # This will be the target layer name for get_module
     # --- End Resolve layer_spec ---
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -179,42 +206,65 @@ def main():
     global FEATURES_TO_ZERO, sae, model, device # Declare modification of globals
 
     args = parse_args()
-    layer_name = args.actual_layer_name
-    current_layer_number = args.actual_layer_number
+    layer_name = args.actual_layer_name # This is the name used by get_module
 
-    # Determine final GIF saving decision based on the single flag
-    # args.no_save_gifs is False by default (meaning save GIFs if flag is NOT present)
-    # If --no_save_gifs is passed, args.no_save_gifs becomes True (meaning DON'T save GIFs)
     should_save_gifs_for_first_trial = not args.no_save_gifs
 
-    print(f"Starting ablation sweep for Layer {current_layer_number} ({layer_name}) using SAE: {args.sae_checkpoint_path}", flush=True)
+    run_description = ""
+    if args.is_sae_run:
+        # args.actual_layer_number should be set if is_sae_run due to parse_args logic
+        run_description = f"SAE Ablation for Layer {args.actual_layer_number} ({layer_name}) using SAE: {args.sae_checkpoint_path}"
+    else:
+        run_description = f"Base Model Channel Ablation for Layer {layer_name}"
+    print(f"Starting: {run_description}", flush=True)
+
     if should_save_gifs_for_first_trial:
-        # This means --no_save_gifs was NOT passed
         print("GIF saving for the first trial of each channel is ENABLED.", flush=True)
     else:
-        # This means --no_save_gifs WAS passed
         print("GIF saving for the first trial of each channel is DISABLED (due to --no_save_gifs flag).", flush=True)
 
-    # --- Load Model and SAE ---
+    # --- Load Model and SAE (conditionally) ---
     print("Loading base model...", flush=True)
     model = helpers.load_interpretable_model(model_path=args.model_path).to(device)
     model.eval()
-    print("Loading SAE model...", flush=True)
-    sae = load_sae_from_checkpoint(args.sae_checkpoint_path).to(device)
-    sae.eval()
-    num_channels = sae.hidden_channels
-    print(f"SAE loaded. Number of channels: {num_channels}", flush=True)
+
+    num_channels = 0
+    if args.is_sae_run:
+        print("Loading SAE model...", flush=True)
+        # sae_checkpoint_path is guaranteed to exist by parse_args if is_sae_run
+        sae = load_sae_from_checkpoint(args.sae_checkpoint_path).to(device)
+        sae.eval()
+        num_channels = sae.hidden_channels
+        print(f"SAE loaded. Number of channels: {num_channels}", flush=True)
+    else: # Base model run
+        # sae global remains None
+        # total_channels_for_base_layer is guaranteed to be set by parse_args
+        num_channels = args.total_channels_for_base_layer
+        print(f"Base model ablation configured for layer '{layer_name}' with {num_channels} channels.", flush=True)
     # --- End Load ---
 
     # --- Hook Setup ---
     module_to_hook = get_module(model, layer_name)
-    handle = module_to_hook.register_forward_hook(hook_sae_activations)
-    print(f"Hook registered on module: {layer_name}", flush=True)
+    handle = None
+    if args.is_sae_run:
+        if sae is None: # Should not happen if is_sae_run and loading succeeded
+             raise RuntimeError("SAE is None during an SAE run setup, check SAE loading.")
+        handle = module_to_hook.register_forward_hook(hook_sae_activations)
+        print(f"SAE Hook registered on module: {layer_name}", flush=True)
+    else: # Base model run
+        handle = module_to_hook.register_forward_hook(hook_base_channel_ablation)
+        print(f"Base Model Channel Ablation Hook registered on module: {layer_name}", flush=True)
     # --- End Hook Setup ---
 
     # --- Setup for filenames ---
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") # Single timestamp for the run
-    safe_sae_name = os.path.basename(args.sae_checkpoint_path).replace('.pt', '')
+    safe_name_part = ""
+    if args.is_sae_run:
+        # args.actual_layer_number should be valid if is_sae_run
+        safe_sae_name_suffix = os.path.basename(args.sae_checkpoint_path).replace('.pt', '')
+        safe_name_part = f"sae_layer{args.actual_layer_number}_{safe_sae_name_suffix}"
+    else: # Base model run
+        safe_name_part = f"baselayer_{layer_name.replace('.', '_')}" # Use actual layer_name
     # ---
 
     start_channel = args.start_channel
@@ -327,7 +377,7 @@ def main():
         if channel_results:
             channel_df = pd.DataFrame(channel_results)
             # Create a filename specific to this channel
-            channel_csv_filename = os.path.join(args.output_dir, f"results_layer{current_layer_number}_{safe_sae_name}_ch{channel_to_keep}_{timestamp}.csv")
+            channel_csv_filename = os.path.join(args.output_dir, f"results_{safe_name_part}_ch{channel_to_keep}_{timestamp}.csv")
             try:
                 channel_df.to_csv(channel_csv_filename, index=False)
                 # Optionally print confirmation, but might clutter tqdm output
