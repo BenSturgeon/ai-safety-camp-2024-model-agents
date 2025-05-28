@@ -532,7 +532,7 @@ def create_trident_maze():
     
     return create_custom_maze_sequence([pattern])
 
-def create_passages_box_maze():
+def create_cross_maze():
     """
     Creates an example sequence of maze environments to demonstrate the custom maze functionality.
     
@@ -578,53 +578,8 @@ def create_passages_box_maze():
     
     return create_custom_maze_sequence([pattern])
 
-def create_passages_box_maze():
-    """
-    Creates an example sequence of maze environments to demonstrate the custom maze functionality.
-    
-    This example creates a sequence showing an entity moving around the maze in a predefined path.
-    
-    Args:
-        entity1 (int): Code for the main entity to track (default: 4, blue key)
-        entity2 (int): Code for a secondary static entity, or None to not include (default: None)
-    
-    Returns:
-        tuple: (observations, venv) - List of observations and final environment
-    """
-    # Define maze patterns (7x7 grids)
-    # 0 = wall, 1 = corridor, 2 = player, 3 = first entity, 4 = second entity
-    # Values: 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
-    pattern = np.array([
-            [5, 1, 0, 1, 0, 1, 6],
-            [1, 1, 1, 1, 1, 1, 1],
-            [0, 1, 1, 1, 1, 1, 0],
-            [1, 0, 1, 2, 1, 0, 1],
-            [0, 1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1, 1, 1],
-            [4, 1, 0, 1, 0, 1, 3]])
 
-
-    # Randomize the positions of the entities (values 3, 4, 5, 6)
-    entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
-    random.shuffle(entity_values)
-    
-    # Create a mapping from original values to shuffled values
-    entity_mapping = {
-        3: entity_values[0],
-        4: entity_values[1],
-        5: entity_values[2],
-        6: entity_values[3]
-    }
-    
-    # Apply the mapping to the pattern
-    for i in range(pattern.shape[0]):
-        for j in range(pattern.shape[1]):
-            if pattern[i, j] in entity_mapping:
-                pattern[i, j] = entity_mapping[pattern[i, j]]
-    
-    return create_custom_maze_sequence([pattern])
-
-def create_passages_box_maze():
+def create_fork_maze():
     """
     Creates an example sequence of maze environments to demonstrate the custom maze functionality.
     
@@ -669,6 +624,54 @@ def create_passages_box_maze():
                 pattern[i, j] = entity_mapping[pattern[i, j]]
     
     return create_custom_maze_sequence([pattern])
+
+
+def create_corners_maze():
+    """
+    Creates an example sequence of maze environments to demonstrate the custom maze functionality.
+    
+    This example creates a sequence showing an entity moving around the maze in a predefined path.
+    
+    Args:
+        entity1 (int): Code for the main entity to track (default: 4, blue key)
+        entity2 (int): Code for a secondary static entity, or None to not include (default: None)
+    
+    Returns:
+        tuple: (observations, venv) - List of observations and final environment
+    """
+    # Define maze patterns (7x7 grids)
+    # 0 = wall, 1 = corridor, 2 = player, 3 = first entity, 4 = second entity
+    # Values: 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
+    pattern = np.array([
+            [3, 0, 0, 2, 0, 0, 4],
+            [1, 0, 0, 1, 0, 0, 1],
+            [1, 0, 0, 1, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 1],
+            [5, 0, 0, 0, 0, 0, 6]])
+
+
+    # Randomize the positions of the entities (values 3, 4, 5, 6)
+    entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
+    random.shuffle(entity_values)
+    
+    # Create a mapping from original values to shuffled values
+    entity_mapping = {
+        3: entity_values[0],
+        4: entity_values[1],
+        5: entity_values[2],
+        6: entity_values[3]
+    }
+    
+    # Apply the mapping to the pattern
+    for i in range(pattern.shape[0]):
+        for j in range(pattern.shape[1]):
+            if pattern[i, j] in entity_mapping:
+                pattern[i, j] = entity_mapping[pattern[i, j]]
+    
+    return create_custom_maze_sequence([pattern])
+
 
 def create_sequential_maze():
     """

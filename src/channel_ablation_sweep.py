@@ -17,7 +17,7 @@ from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 # import matplotlib.pyplot as plt
 
 # Keep environment creation if needed later, but heist.create_venv used now
-from src.utils.create_intervention_mazes import create_fork_maze
+from src.utils.create_intervention_mazes import create_fork_maze, create_corners_maze
 
 from utils.helpers import run_episode_and_get_final_state
 from utils.heist import (
@@ -153,6 +153,7 @@ def parse_args():
     parser.add_argument("--end_channel", type=int, default=None, help="Ending channel index (exclusive). If None, runs all channels specified by SAE or total_channels_for_base_layer.")
     parser.add_argument("--no_save_gifs", action="store_true", help="Disable saving a GIF for the first trial of each channel.")
     parser.add_argument("--total_channels_for_base_layer", type=int, default=None, help="Total channels in the base model layer, REQUIRED if not an SAE run (i.e., sae_checkpoint_path is not provided).")
+    parser.add_argument("--maze_type", type=str, default="fork", choices=["fork", "corners"], help="Type of maze to use for the experiment.")
 
     args = parser.parse_args()
 
@@ -284,7 +285,12 @@ def main():
             try:
                 # --- Create Venv and Get Initial Entities FOR EACH TRIAL ---
                 # print(f"Creating new fork maze environment for Ch {channel_to_keep}, Trial {trial_idx}...", flush=True) # Optional debug
-                _, venv_trial = create_fork_maze() # Create fresh maze for each trial
+                if args.maze_type == "fork":
+                    _, venv_trial = create_fork_maze() # Create fresh maze for each trial
+                elif args.maze_type == "corners":
+                    _, venv_trial = create_corners_maze() # Create fresh maze for each trial
+                else:
+                    parser.error(f"Invalid maze_type: {args.maze_type}")
                 # print("Trial environment created.", flush=True) # Optional debug
 
                 # print("Determining initial entities for this trial...", flush=True) # Optional debug
@@ -344,7 +350,7 @@ def main():
                 channel_results.append({
                     "channel_kept": channel_to_keep,
                     "trial": trial_idx,
-                    "maze_type": "fork",
+                    "maze_type": args.maze_type,
                     "initial_entities": set_to_string(initial_entities),
                     "remaining_entities": set_to_string(remaining_entities), # Save the simplified remaining set
                     "collected_entities": set_to_string(collected_entities),   # Save the robust collected set
@@ -360,7 +366,7 @@ def main():
                 channel_results.append({
                     "channel_kept": channel_to_keep,
                     "trial": trial_idx,
-                    "maze_type": "fork",
+                    "maze_type": args.maze_type,
                     "initial_entities": "ERROR",
                     "remaining_entities": "ERROR", # <<< Update error reporting
                     "collected_entities": "ERROR", # <<< Update error reporting
