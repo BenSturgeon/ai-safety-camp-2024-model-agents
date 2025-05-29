@@ -8,10 +8,11 @@ import argparse
 from pathlib import Path
 import sys
 import torch # Added for dead channel detection
+import traceback # Add this import
 
 # Attempt to import functions for dead channel detection
 try:
-    from sae_cnn import load_sae_from_checkpoint, load_interpretable_model, ordered_layer_names as sae_ordered_layer_names
+    from sae_cnn import load_sae_from_checkpoint, ordered_layer_names as sae_ordered_layer_names
     from detect_dead_channels import identify_dead_channels, export_simple_csv as dc_export_simple_csv
     DETECTION_IMPORTS_AVAILABLE = True
 except ImportError as e:
@@ -84,8 +85,8 @@ def load_results_csv(base_dir):
     return df, layer_name
 
 def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_channels_csv=None,
-         run_detection_if_csv_missing=False, exclude_dead_channels=False,
-         sae_checkpoint_for_detection=None, model_checkpoint_for_detection=None,
+         run_detection_if_csv_missing=True, exclude_dead_channels=False,
+         sae_checkpoint_for_detection_arg=None, model_checkpoint_for_detection=None,
          detection_samples=256, detection_batch_size=32, detection_threshold=1e-6):
     """
     Generate bubble plots showing distribution of successful interventions by entity.
@@ -122,6 +123,41 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
     # --- Load or Detect Dead Channels ---
     dead_channel_set = set()
     loaded_from_csv = False
+
+    # Determine the actual SAE checkpoint path to use
+    # sae_checkpoint_for_detection_arg is from the command line
+    # sae_checkpoint_for_detection will be the one actually used by the script
+    sae_checkpoint_to_use = sae_checkpoint_for_detection_arg 
+
+    if sae_checkpoint_to_use is None and layer_name and layer_name != "UnknownLayer":
+        # Only attempt inference if no explicit path is given AND we have a valid layer_name
+        print("Attempting to infer SAE checkpoint path as none was explicitly provided...")
+        
+        # results_dir might be like: quantitative_interventions_sae_python_narrow_range/sae_checkpoint_step_20000000_alpha_l8
+        # We want the last part as the stem for the .pt file: sae_checkpoint_step_20000000_alpha_l8
+        sae_filename_stem = Path(results_dir.rstrip('/')).name 
+        sae_filename = f"{sae_filename_stem}.pt"
+
+        # Try to find the layer number from sae_ordered_layer_names using the layer_name from the CSV
+        layer_number_for_path = None
+        if sae_ordered_layer_names: # Check if the import was successful
+            for num, name_in_map in sae_ordered_layer_names.items():
+                if name_in_map == layer_name:
+                    layer_number_for_path = num
+                    break
+        
+        if layer_number_for_path is not None:
+            # Construct path like: checkpoints_of_interest/layer_8_conv4a/sae_checkpoint_step_20000000_alpha_l8.pt
+            inferred_path = Path("checkpoints_of_interest") / f"layer_{layer_number_for_path}_{layer_name}" / sae_filename
+            if inferred_path.exists():
+                sae_checkpoint_to_use = str(inferred_path)
+                print(f"  Inferred and using SAE checkpoint: {sae_checkpoint_to_use}")
+            else:
+                print(f"  Warning: Inferred SAE checkpoint path does not exist or is not accessible: {inferred_path}")
+                print(f"  Please provide --sae_checkpoint_for_detection manually if detection is desired.")
+        else:
+            print(f"  Warning: Could not determine layer number for '{layer_name}' from sae_ordered_layer_names to infer SAE checkpoint path.")
+            print(f"  Please provide --sae_checkpoint_for_detection manually if detection is desired.")
 
     # If dead_channels_csv was not provided by user, construct default path using current results_dir and layer_name
     effective_dead_channels_csv = dead_channels_csv
@@ -170,14 +206,16 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
                  print(f"Info: Dead channels CSV not found at {effective_dead_channels_csv}.")
         except Exception as e:
             print(f"Warning: Error loading dead channels CSV {effective_dead_channels_csv}: {e}. Skipping.")
-
+    print("checking dead channels")
+    print(loaded_from_csv,run_detection_if_csv_missing, DETECTION_IMPORTS_AVAILABLE)
     if not loaded_from_csv and run_detection_if_csv_missing:
         if not DETECTION_IMPORTS_AVAILABLE:
-            print("Warning: Imports for dead channel detection are not available. Cannot run detection.")
-        elif not sae_checkpoint_for_detection:
-            print("Warning: --sae_checkpoint_for_detection not provided. Cannot run dead channel detection.")
+            print("ERROR: Dead channel detection was requested (or is default behavior), but necessary modules could not be imported. Please check dependencies (e.g., sae_cnn, detect_dead_channels, and their own dependencies like procgen). Exiting.")
+            sys.exit(1) # Exit if detection is critical and imports failed
+        elif not sae_checkpoint_to_use: # Check the determined path (either inferred or from arg)
+            print("Warning: SAE checkpoint for on-the-fly detection not provided and could not be inferred. Skipping detection.")
         else:
-            print(f"Attempting to detect dead channels using SAE: {sae_checkpoint_for_detection}")
+            print(f"Attempting to detect dead channels using SAE: {sae_checkpoint_to_use}")
             try:
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 
@@ -194,7 +232,7 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
                 
                 if sae_layer_number_for_detection is None:
                     # Fallback: try to parse from SAE checkpoint path (less reliable here)
-                    for part in Path(sae_checkpoint_for_detection).parts:
+                    for part in Path(sae_checkpoint_to_use).parts:
                         if part.startswith("layer_"):
                             try:
                                 sae_layer_number_for_detection = int(part.split("_")[1])
@@ -202,24 +240,25 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
                             except: pass
                 
                 if sae_layer_number_for_detection is None:
-                    raise ValueError(f"Could not determine SAE layer number for detection from SAE path '{sae_checkpoint_for_detection}' or layer_name '{layer_name}'.")
+                    raise ValueError(f"Could not determine SAE layer number for detection from SAE path '{sae_checkpoint_to_use}' or layer_name '{layer_name}'.")
 
                 print(f"  Loading SAE for layer {sae_layer_number_for_detection} ({layer_name}) for detection...")
-                sae = load_sae_from_checkpoint(sae_checkpoint_for_detection, device)
+                sae = load_sae_from_checkpoint(sae_checkpoint_to_use, device)
                 
                 print("  Loading base model for detection...")
                 # Use provided model path or let load_interpretable_model find its default
                 base_model_path = model_checkpoint_for_detection if model_checkpoint_for_detection else None
-                model = load_interpretable_model(path=base_model_path).to(device)
-                model.eval()
+
                 
                 print(f"  Running dead channel identification (samples={detection_samples}, batch={detection_batch_size})...")
                 # Ensure identify_dead_channels gets the correct layer_name if it needs it for module path
                 # The `layer_number` argument for identify_dead_channels is the key.
+                
                 detected_dead_list, detected_channel_stats = identify_dead_channels(
-                    sae, model, sae_layer_number_for_detection, 
+                    sae, sae_layer_number_for_detection, 
                     num_samples=detection_samples, batch_size=detection_batch_size, threshold=detection_threshold
                 )
+                print(f"{detected_dead_list=}")
                 dead_channel_set = set(detected_dead_list)
                 print(f"  Detected {len(dead_channel_set)} dead channels: {sorted(list(dead_channel_set))}")
 
@@ -235,6 +274,8 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
 
             except Exception as e_detect:
                 print(f"Warning: Error during dead channel detection: {e_detect}")
+                print("Full traceback for dead channel detection error:")
+                traceback.print_exc() # This will print the full stack trace
     # --- End Load or Detect Dead Channels ---
     
     # Ensure required columns exist
@@ -405,9 +446,31 @@ def main(results_dir, num_top_channels=20, auto_select_first_file=True, dead_cha
         # Fallback: just let matplotlib handle labels if mismatch
         # This case should ideally not happen if stripplot behaves as expected with 'order'
 
+    # --- Extract Designation for Plot Title ---
+    sae_designation = ""
+    if sae_checkpoint_to_use: # If an SAE checkpoint is involved (use the determined path)
+        actual_sae_stem = Path(sae_checkpoint_to_use).stem.lower() # e.g., "sae_checkpoint_step_20000000_alpha_l8"
+        
+        if "_alpha" in actual_sae_stem:
+            sae_designation = "Alpha"
+        elif "_beta" in actual_sae_stem:
+            sae_designation = "Beta"
+        elif "_gamma" in actual_sae_stem:
+            sae_designation = "Gamma"
+        # Add more extraction logic here if needed (e.g., using regex for more complex patterns)
+
     # Create more informative title using the found layer name and top channel count
     title_layer_name = layer_name if layer_name else "UnknownLayer"
-    plt.title(f"Distribution of Successful Interventions by Entity Type (Top {len(top_channels)} Channels)\nLayer: {title_layer_name} SAE | Entities: {len(entities_present)}")
+    
+    plot_main_title_line = f"Distribution of Successful Interventions by Entity Type (Top {len(top_channels)} Channels)"
+    
+    subtitle_parts = [f"Layer: {title_layer_name} SAE"]
+    if sae_designation:
+        subtitle_parts.append(f"Designation: {sae_designation}")
+    subtitle_parts.append(f"Entities: {len(entities_present)}")
+    plot_subtitle_line = " | ".join(subtitle_parts)
+    
+    plt.title(f"{plot_main_title_line}\n{plot_subtitle_line}")
     plt.legend(title='Entity Type', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(axis='both', linestyle='--', alpha=0.6) # Grid on both axes
     plt.tight_layout(rect=[0, 0, 0.85, 1])
@@ -447,12 +510,15 @@ if __name__ == "__main__" and not is_running_in_jupyter():
                         default=None, # Changed default to None
                         help="Optional path to CSV file listing dead channels. If not given, attempts to find [results_dir]/dead_channels_[layer_name].csv or [results_dir]/detected_dead_channels_[layer_name].csv")
     # New arguments for on-the-fly detection
-    parser.add_argument("--run_detection_if_csv_missing", action="store_true",
-                        help="If --dead_channels_csv is not found/valid, attempt detection.")
+    parser.add_argument("--skip-on-the-fly-detection",
+                        action="store_false",
+                        dest="run_detection_if_csv_missing",
+                        help="If specified, will NOT attempt on-the-fly dead channel detection if a CSV is not found. Default behavior is to attempt detection.")
     parser.add_argument("--exclude_dead_channels", action="store_true",
                         help="If set, identified dead channels will be excluded from top channel selection and the plot.")
     parser.add_argument("--sae_checkpoint_for_detection", type=str, default=None,
-                        help="Path to SAE checkpoint for on-the-fly dead channel detection.")
+                        dest="sae_checkpoint_for_detection_arg",
+                        help="Path to SAE checkpoint for on-the-fly dead channel detection. If not provided, attempts to infer from --results_dir and CSV.")
     parser.add_argument("--model_checkpoint_for_detection", type=str, default=None,
                         help="Path to base model checkpoint for on-the-fly dead channel detection.")
     parser.add_argument("--detection_samples", type=int, default=256,
@@ -467,7 +533,7 @@ if __name__ == "__main__" and not is_running_in_jupyter():
          dead_channels_csv=args.dead_channels_csv,
          run_detection_if_csv_missing=args.run_detection_if_csv_missing,
          exclude_dead_channels=args.exclude_dead_channels,
-         sae_checkpoint_for_detection=args.sae_checkpoint_for_detection,
+         sae_checkpoint_for_detection_arg=args.sae_checkpoint_for_detection_arg,
          model_checkpoint_for_detection=args.model_checkpoint_for_detection,
          detection_samples=args.detection_samples,
          detection_batch_size=args.detection_batch_size,
