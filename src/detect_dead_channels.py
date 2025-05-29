@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
+import torch
 
 from sae_cnn import (
     load_sae_from_checkpoint,
@@ -16,8 +17,10 @@ from sae_cnn import (
 )
 from utils import heist
 
-def identify_dead_channels(sae, model, layer_number, num_samples=1000, batch_size=64, threshold=1e-6):
-    device = next(model.parameters()).device
+def identify_dead_channels(sae, layer_number, num_samples=1000, batch_size=64, threshold=1e-6):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_interpretable_model()
+    model.to(device)
     layer_name = ordered_layer_names[layer_number]
     
     # Get module for the target layer
@@ -62,7 +65,9 @@ def identify_dead_channels(sae, model, layer_number, num_samples=1000, batch_siz
             
             # Forward through the model to trigger hook
             with t.no_grad():
-                model(obs.to(device))
+                # DEBUGGING: Check devices just before the model call
+                processed_obs = obs.to(device)
+                model(processed_obs)
             
             collected_samples += obs.shape[0]
             
@@ -199,7 +204,7 @@ def main(sae_path, num_samples=1000, batch_size=64, threshold=1e-6, output_dir=N
     # Identify dead channels
     print(f"Analyzing layer {layer_number} ({ordered_layer_names[layer_number]})...")
     dead_channels, channel_stats = identify_dead_channels(
-        sae, model, layer_number, num_samples, batch_size, threshold
+        sae, layer_number, num_samples, batch_size, threshold
     )
     
     # Output results
