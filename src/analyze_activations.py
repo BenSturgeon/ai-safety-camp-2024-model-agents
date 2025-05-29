@@ -4,30 +4,72 @@ import os
 from tqdm import tqdm
 import argparse
 import re
+import glob
 
 # Procgen environment and project utilities
 from utils import heist as heist_utils
-from utils import helpers
+from utils import helpers 
 
 # SAE loading
 from sae_cnn import load_sae_from_checkpoint
 
 # --- Configuration ---
-NUM_RUNS_DEFAULT = 100
-NUM_STEPS_PER_RUN_DEFAULT = 200
+NUM_RUNS_DEFAULT = 50
+NUM_STEPS_PER_RUN_DEFAULT = 300
+BATCH_SIZE_DEFAULT = 16  # Process SAEs in batches for efficiency
+SAMPLE_RATIO_DEFAULT = 1.0  # Sample ratio for faster analysis (1.0 = all steps)
 BASE_MODEL_PATH_DEFAULT = "../model_interpretable.pt"
 
-SAE_INFO_DEFAULT = {
-    "sae_conv4a_l8": {
-        "path": "checkpoints_of_interest/layer_8_conv4a/sae_checkpoint_step_20000000_alpha_l8.pt",
-        "base_layer_name": "conv4a"
-    },
-    "sae_conv3a_l6": {
-        "path": "checkpoints_of_interest/layer_6_conv3a/sae_checkpoint_step_20000000_alpha_l6.pt",
-        "base_layer_name": "conv3a"
-    },
-}
-BASE_LAYERS_TO_ANALYZE_DEFAULT = ["conv4a", "conv3a"]
+# Auto-discover SAE files in checkpoints_of_interest
+def discover_sae_checkpoints():
+    """Automatically discover all SAE checkpoint files for conv3a and conv4a layers."""
+    sae_info = {}
+    
+    # Define patterns for conv3a and conv4a layers
+    patterns = [
+        ("layer_6_conv3a", "conv3a"),
+        ("layer_8_conv4a", "conv4a")
+    ]
+    
+    for layer_dir, base_layer_name in patterns:
+        checkpoint_dir = f"checkpoints_of_interest/{layer_dir}"
+        if os.path.exists(checkpoint_dir):
+            # Look for .pt files that are not .backup files
+            pt_files = glob.glob(os.path.join(checkpoint_dir, "*.pt"))
+            pt_files = [f for f in pt_files if not f.endswith(".backup")]
+            
+            for pt_file in pt_files:
+                filename = os.path.basename(pt_file)
+                # Create a descriptive SAE ID
+                if "alpha" in filename:
+                    sae_id = f"sae_{base_layer_name}_alpha_{layer_dir.split('_')[1]}"
+                elif "beta" in filename:
+                    sae_id = f"sae_{base_layer_name}_beta_{layer_dir.split('_')[1]}"
+                elif "gamma" in filename:
+                    sae_id = f"sae_{base_layer_name}_gamma_{layer_dir.split('_')[1]}"
+                elif "delta" in filename:
+                    sae_id = f"sae_{base_layer_name}_delta_{layer_dir.split('_')[1]}"
+                elif "epsilon" in filename:
+                    sae_id = f"sae_{base_layer_name}_epsilon_{layer_dir.split('_')[1]}"
+                else:
+                    # For files without specific names, use a generic identifier
+                    sae_id = f"sae_{base_layer_name}_generic_{layer_dir.split('_')[1]}"
+                
+                sae_info[sae_id] = {
+                    "path": pt_file,
+                    "base_layer_name": base_layer_name
+                }
+    
+    return sae_info
+
+# SAE_INFO_DEFAULT will be populated by discover_sae_checkpoints()
+SAE_INFO_DEFAULT = discover_sae_checkpoints()
+
+# Print discovered SAEs for user confirmation
+print("Discovered SAE checkpoints:")
+for sae_id, info in SAE_INFO_DEFAULT.items():
+    print(f"  {sae_id}: {info['path']} -> {info['base_layer_name']}")
+print()
 
 # Define module paths for direct hooking
 BASE_LAYER_MODULE_PATHS = {
@@ -63,217 +105,292 @@ def get_base_hook(layer_name_key):
     return hook_fn
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Analyze activation ranges in a base model and SAEs.")
+    parser = argparse.ArgumentParser(description="Analyze activation ranges in a base model and all discovered SAEs.")
     parser.add_argument("--num_runs", type=int, default=NUM_RUNS_DEFAULT, help="Number of simulation runs.")
     parser.add_argument("--num_steps_per_run", type=int, default=NUM_STEPS_PER_RUN_DEFAULT, help="Number of steps per simulation run.")
+    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE_DEFAULT, help="Batch size for SAE processing (higher = faster but more memory).")
+    parser.add_argument("--sample_ratio", type=float, default=SAMPLE_RATIO_DEFAULT, help="Ratio of steps to sample for SAE analysis (0.1 = 10%% of steps, faster).")
+    parser.add_argument("--fast", action="store_true", help="Fast mode: use fewer runs/steps for quick testing (10 runs, 50 steps each).")
     parser.add_argument("--base_model_path", type=str, default=BASE_MODEL_PATH_DEFAULT, help="Path to the base model checkpoint (relative to src/).")
-    parser.add_argument("--output_report_file", type=str, default="activation_report.txt", help="File to save the activation report (will be saved in src/).")
+    parser.add_argument("--output_report_file", type=str, default="comprehensive_sae_activation_report.txt", help="File to save the comprehensive activation report (will be saved in src/).")
     return parser.parse_args()
 
 def main():
     args = parse_args()
 
+    # Apply fast mode settings
+    if args.fast:
+        args.num_runs = 10
+        args.num_steps_per_run = 50
+        args.sample_ratio = 0.5
+        print("Fast mode enabled: 10 runs, 50 steps each, 50% sampling")
+
     global collected_base_activations, collected_sae_features
-    collected_base_activations = {layer: [] for layer in BASE_LAYERS_TO_ANALYZE_DEFAULT}
+    collected_base_activations = {layer: [] for layer in SAE_INFO_DEFAULT}
     collected_sae_features = {sae_id: [] for sae_id in SAE_INFO_DEFAULT}
 
     print(f"Using device: {DEVICE}")
     print(f"Number of runs: {args.num_runs}, Steps per run: {args.num_steps_per_run}")
+    print(f"Batch size: {args.batch_size}, Sample ratio: {args.sample_ratio}")
     print(f"Base model path: {args.base_model_path}")
+    print(f"Analyzing {len(SAE_INFO_DEFAULT)} SAE checkpoints")
+    print()
 
-    # 1. Load the main model using helpers
-    try:
-        model = helpers.load_interpretable_model(model_path=args.base_model_path)
-        model.to(DEVICE)
-        model.eval()
-        print("Base model loaded successfully using helpers.load_interpretable_model.")
-    except Exception as e:
-        print(f"Error loading base model from {args.base_model_path} using helpers: {e}")
-        return
+    # Load the base model
+    model = helpers.load_interpretable_model(model_path=args.base_model_path)
+    model.to(DEVICE)
+    model.eval()
+    print("Base model loaded successfully using helpers.load_interpretable_model.")
 
-    # 2. Register hooks for specified base layers
-    base_handles = {}
-    for layer_name_key in BASE_LAYERS_TO_ANALYZE_DEFAULT:
-        if layer_name_key not in BASE_LAYER_MODULE_PATHS:
-            print(f"Error: Module path for layer '{layer_name_key}' not defined in BASE_LAYER_MODULE_PATHS. Skipping hook.")
-            continue
-        module_path = BASE_LAYER_MODULE_PATHS[layer_name_key]
-        try:
-            module_to_hook = get_module_by_path(model, module_path)
-            if module_to_hook:
-                handle = module_to_hook.register_forward_hook(get_base_hook(layer_name_key))
-                base_handles[layer_name_key] = handle
-                print(f"Hooked base layer: {layer_name_key} (module: {module_path})")
-            else:
-                print(f"Error: Could not find module at path '{module_path}' for layer {layer_name_key}.")
-        except Exception as e:
-            print(f"Error setting up hook for base layer {layer_name_key} (path {module_path}): {e}")
-
-    if not base_handles:
-        print("Error: No base layer hooks were successfully attached. Aborting.")
-        return
-            
-    # 3. Load SAEs using sae_cnn.load_sae_from_checkpoint
+    # Load all SAEs
+    print("\nLoading SAEs...")
     loaded_saes = {}
-    sae_input_layer_map = {} 
+    sae_input_layer_map = {}
     
-    for sae_id, info in SAE_INFO_DEFAULT.items():
+    for sae_id, sae_info in SAE_INFO_DEFAULT.items():
         try:
-            sae_module = load_sae_from_checkpoint(info["path"], device=DEVICE)
-            loaded_saes[sae_id] = sae_module 
-            sae_input_layer_map[sae_id] = info["base_layer_name"]
-            print(f"Loaded SAE module: {sae_id} (from {info['path']}), takes input from base layer '{info['base_layer_name']}'.")
+            sae_path = sae_info["path"]
+            print(f"Loading SAE from checkpoint: {sae_path}")
+            sae_module = load_sae_from_checkpoint(sae_path, DEVICE)
+            loaded_saes[sae_id] = sae_module
+            sae_input_layer_map[sae_id] = sae_info["base_layer_name"]
+            print(f"Loaded SAE module: {sae_id} (from {sae_path}), takes input from base layer '{sae_info['base_layer_name']}'.")
         except Exception as e:
-            print(f"Error loading SAE {sae_id} from {info['path']} using load_sae_from_checkpoint: {e}")
-            for h in base_handles.values(): h.remove()
-            return
+            print(f"Failed to load SAE {sae_id} from {sae_path}: {e}")
+            continue
+
+    # Initialize collections for SAE feature activations
+    collected_sae_features = {sae_id: [] for sae_id in loaded_saes.keys()}
+    unique_base_layers = set(info["base_layer_name"] for info in SAE_INFO_DEFAULT.values())
+    collected_base_activations = {layer_name: [] for layer_name in unique_base_layers}
+
+    # Set up hooks for base layer activations
+    base_layer_hooks = {}
     
-    if not loaded_saes:
-        print("Warning: No SAEs were loaded. Proceeding with base model analysis only.")
+    def create_base_hook(layer_name):
+        def hook_fn(module, input, output):
+            collected_base_activations[layer_name].append(output.detach())  # Keep on GPU for efficiency
+        return hook_fn
 
-    # 4. Simulation Loop
-    venv = heist_utils.create_venv(num=1, start_level=0, num_levels=args.num_runs)
+    # Register hooks for each unique base layer
+    for base_layer_name in unique_base_layers:
+        if hasattr(model, base_layer_name):
+            base_layer_module = getattr(model, base_layer_name)
+            hook = base_layer_module.register_forward_hook(create_base_hook(base_layer_name))
+            base_layer_hooks[base_layer_name] = hook
+            print(f"Hooked base layer: {base_layer_name} (module: {base_layer_name})")
+        else:
+            print(f"Warning: Base layer {base_layer_name} not found in model")
 
-    for run_idx in tqdm(range(args.num_runs), desc="Simulation Runs"):
-        obs = venv.reset()
-        for step_idx in range(args.num_steps_per_run):
-            if isinstance(obs, tuple) and len(obs) > 0 and isinstance(obs[0], dict) and 'rgb' in obs[0]:
-                 obs_np = obs[0]['rgb'] 
-            elif isinstance(obs, np.ndarray) and obs.shape == (1, 64, 64, 3):
-                 obs_np = obs[0]
-            elif isinstance(obs, np.ndarray) and obs.shape == (64, 64, 3):
-                 obs_np = obs
-            else: 
-                 obs_np = obs 
-            
-            obs_tensor = torch.tensor(obs_np, dtype=torch.float32).to(DEVICE)
-            if obs_tensor.ndim == 3: 
-                obs_tensor = obs_tensor.unsqueeze(0)
-            elif obs_tensor.ndim == 4 and obs_tensor.shape[0] != 1:
-                obs_tensor = obs_tensor[0].unsqueeze(0)
-            
-            if obs_tensor.shape[1:] != (3, 64, 64) and obs_tensor.shape[1:] != (64, 64, 3):
-                 if obs_tensor.shape == (1, 64, 64, 3) :
-                     obs_tensor = obs_tensor.permute(0, 3, 1, 2)
-                 else:
-                    tqdm.write(f"Warning: Unexpected observation tensor shape: {obs_tensor.shape} in run {run_idx}, step {step_idx}. Skipping step.")
-                    continue
+    print(f"\nRunning {args.num_runs} simulation runs...")
+    
+    # Calculate sampling parameters
+    total_steps = args.num_runs * args.num_steps_per_run
+    sample_interval = max(1, int(1.0 / args.sample_ratio)) if args.sample_ratio < 1.0 else 1
+    expected_samples = int(total_steps * args.sample_ratio)
+    
+    print(f"Collecting ~{expected_samples:,} samples (sampling every {sample_interval} steps)")
+    
+    # Batch collection of activations
+    activation_batch = {layer_name: [] for layer_name in unique_base_layers}
+    global_step = 0
+    
+    # Run simulations
+    with torch.no_grad():
+        for run_idx in tqdm(range(args.num_runs), desc="Simulation Runs"):
+                # Generate a random environment and run for num_steps_per_run
+                env = heist_utils.create_venv(num=1, start_level=0, num_levels=0)
+                obs = env.reset()
+                
+                for step_idx in range(args.num_steps_per_run):
+                    global_step += 1
+                    
+                    # Only collect activations based on sampling ratio
+                    if global_step % sample_interval == 0:
+                        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=DEVICE)
+                        _ = model(obs_tensor)  # Forward pass to collect base activations
+                        
+                        # Collect base activations (hooks fill collected_base_activations)
+                        for layer_name in unique_base_layers:
+                            if collected_base_activations.get(layer_name) and collected_base_activations[layer_name]:
+                                # Take the latest activation and add to batch
+                                base_act = collected_base_activations[layer_name][-1]
+                                activation_batch[layer_name].append(base_act)
+                                
+                        # Process SAE batches when batch is full
+                        for layer_name in activation_batch:
+                            if len(activation_batch[layer_name]) >= args.batch_size:
+                                batch_tensor = torch.cat(activation_batch[layer_name], dim=0)
+                                
+                                # Process all SAEs for this layer in the batch
+                                for sae_id, sae_module in loaded_saes.items():
+                                    if sae_input_layer_map[sae_id] == layer_name:
+                                        try:
+                                            sae_outputs_tuple = sae_module(batch_tensor)
+                                            if isinstance(sae_outputs_tuple, tuple) and len(sae_outputs_tuple) > 2:
+                                                sae_feature_acts = sae_outputs_tuple[2].detach().cpu()
+                                                collected_sae_features[sae_id].extend([act for act in sae_feature_acts])
+                                        except Exception as e:
+                                            tqdm.write(f"Error processing SAE {sae_id}: {e}")
+                                
+                                # Clear the batch
+                                activation_batch[layer_name] = []
 
-            with torch.no_grad():
-                model_output = model(obs_tensor)
+                    # Step in environment
+                    action = np.random.randint(0, env.action_space.n)
+                    obs, _, done, _ = env.step(np.array([action]))
+                    if done[0]:
+                        obs = env.reset()
+                
+                # Close environment after each run
+                env.close()
 
-            with torch.no_grad():
+            # Process any remaining activations in batches
+                print("\nProcessing remaining activation batches...")
+        for layer_name in activation_batch:
+            if activation_batch[layer_name]:
+                batch_tensor = torch.cat(activation_batch[layer_name], dim=0)
+                
                 for sae_id, sae_module in loaded_saes.items():
-                    input_base_layer_name = sae_input_layer_map[sae_id]
-                    if collected_base_activations.get(input_base_layer_name) and collected_base_activations[input_base_layer_name]:
-                        base_act_for_sae = collected_base_activations[input_base_layer_name][-1].to(DEVICE)
-                        
-                        sae_outputs_tuple = sae_module(base_act_for_sae) 
-                        
-                        if isinstance(sae_outputs_tuple, tuple) and len(sae_outputs_tuple) > 2:
-                             sae_feature_act = sae_outputs_tuple[2].detach().cpu()
-                             collected_sae_features[sae_id].append(sae_feature_act)
-                        else:
-                            tqdm.write(f"Warning: Unexpected output structure from SAE {sae_id}. Type: {type(sae_outputs_tuple)}, Len: {len(sae_outputs_tuple) if isinstance(sae_outputs_tuple, tuple) else 'N/A'}. Cannot extract feature activations.")
+                    if sae_input_layer_map[sae_id] == layer_name:
+                        try:
+                            sae_outputs_tuple = sae_module(batch_tensor)
+                            if isinstance(sae_outputs_tuple, tuple) and len(sae_outputs_tuple) > 2:
+                                sae_feature_acts = sae_outputs_tuple[2].detach().cpu()
+                                collected_sae_features[sae_id].extend([act for act in sae_feature_acts])
+                        except Exception as e:
+                            print(f"Error processing remaining SAE {sae_id}: {e}")
 
-            action_logits = None
-            if hasattr(model_output, 'logits'):
-                action_logits = model_output.logits
-            elif isinstance(model_output, tuple) and hasattr(model_output[0], 'logits'):
-                 action_logits = model_output[0].logits
-            elif isinstance(model_output, torch.Tensor) and model_output.ndim == 2 :
-                 action_logits = model_output
-            else: 
-                try:
-                    action_logits = getattr(model_output, 'pi_logits', None) 
-                    if action_logits is None: 
-                        ac_output = getattr(model_output, 'ac_output', None)
-                        if ac_output is not None: action_logits = getattr(ac_output, 'pi_logits', None)
-                    if action_logits is None: raise ValueError("Could not find 'pi_logits'.")
-                except Exception:
-                    tqdm.write(f"Warning: Could not extract logits for action selection. Type: {type(model_output)}. Sampling random action.")
-                    action_np = np.array([venv.action_space.sample()])
+    print(f"\nCompleted {args.num_runs} runs with {global_step:,} total steps.")
+
+    # Remove hooks
+    for hook in base_layer_hooks.values():
+        hook.remove()
+    print("Removed base layer hooks.")
+
+    # Collect all base activations for analysis
+    print("Collecting base activations for final analysis...")
+    for base_layer_name in unique_base_layers:
+        if collected_base_activations.get(base_layer_name):
+            # Keep a small sample of base activations for the report
+            sample_size = min(1000, len(collected_base_activations[base_layer_name]))
+            if sample_size > 0:
+                sampled_acts = collected_base_activations[base_layer_name][:sample_size]
+                collected_base_activations[base_layer_name] = [act.cpu() for act in sampled_acts]
+
+    # Generate comprehensive report
+    print("\nGenerating comprehensive activation report...")
+    
+    report_lines = []
+    report_lines.append("="*80)
+    report_lines.append("COMPREHENSIVE SAE ACTIVATION ANALYSIS REPORT")
+    report_lines.append("="*80)
+    report_lines.append(f"Number of simulation runs: {args.num_runs}")
+    report_lines.append(f"Steps per run: {args.num_steps_per_run}")
+    report_lines.append(f"Total SAEs analyzed: {len(loaded_saes)}")
+    report_lines.append("")
+
+    # Base layer activations summary
+    report_lines.append("BASE LAYER ACTIVATIONS SUMMARY:")
+    report_lines.append("-" * 40)
+    for base_layer_name in unique_base_layers:
+        if collected_base_activations.get(base_layer_name):
+            all_base_acts = torch.cat(collected_base_activations[base_layer_name], dim=0)
+            base_min = all_base_acts.min().item()
+            base_max = all_base_acts.max().item()
+            base_mean = all_base_acts.mean().item()
+            base_std = all_base_acts.std().item()
             
-            if action_logits is not None:
-                probabilities = torch.nn.functional.softmax(action_logits, dim=-1)
-                action = torch.multinomial(probabilities, num_samples=1)
-                action_np = action.squeeze(-1).cpu().numpy()
-            
-            obs, reward, done, info = venv.step(action_np)
-            
-            if isinstance(done, (bool, np.bool_)): is_done = done
-            elif isinstance(done, (list, np.ndarray)): is_done = done[0]
-            else: is_done = False 
+            report_lines.append(f"Layer {base_layer_name}:")
+            report_lines.append(f"  Min: {base_min:.6f}")
+            report_lines.append(f"  Max: {base_max:.6f}")
+            report_lines.append(f"  Mean: {base_mean:.6f}")
+            report_lines.append(f"  Std: {base_std:.6f}")
+            report_lines.append(f"  Total samples: {all_base_acts.shape[0]}")
+            report_lines.append("")
 
-            if is_done:
-                break 
-
-    venv.close()
-
-    for handle in base_handles.values():
-        handle.remove()
-    print("\nRemoved base layer hooks.")
-
-    # 5. Process Activations and Report
-    report_lines = ["Activation Value Report"]
-    report_lines.append(f"Number of Runs: {args.num_runs}, Steps per Run: {args.num_steps_per_run} (or until episode done)")
-    report_lines.append(f"Base Model: {args.base_model_path}")
-    report_lines.append("="*40)
-
-    for layer_name, activations_list in collected_base_activations.items():
-        if not activations_list:
-            report_lines.append(f"\n--- Base Layer: {layer_name} ---")
-            report_lines.append("  No activations collected.")
-            continue
+    # SAE feature activations summary
+    report_lines.append("SAE FEATURE ACTIVATIONS SUMMARY:")
+    report_lines.append("-" * 40)
+    
+    # Group SAEs by layer for better organization
+    sae_by_layer = {}
+    for sae_id, sae_info in SAE_INFO_DEFAULT.items():
+        if sae_id in loaded_saes:  # Only include successfully loaded SAEs
+            base_layer = sae_info["base_layer_name"]
+            if base_layer not in sae_by_layer:
+                sae_by_layer[base_layer] = []
+            sae_by_layer[base_layer].append(sae_id)
+    
+    for base_layer_name, sae_ids in sae_by_layer.items():
+        report_lines.append(f"\n{base_layer_name.upper()} LAYER SAEs:")
+        report_lines.append("=" * 50)
         
-        all_acts_tensor = torch.cat(activations_list, dim=0) 
-        num_channels = all_acts_tensor.shape[1]
-        
-        report_lines.append(f"\n--- Base Layer: {layer_name} ({num_channels} channels) ---")
-        report_lines.append(f"  Shape of all collected activations: {all_acts_tensor.shape}")
-        
-        overall_min = all_acts_tensor.min().item()
-        overall_max = all_acts_tensor.max().item()
-        report_lines.append(f"  Overall Min Activation: {overall_min:.6f}")
-        report_lines.append(f"  Overall Max Activation: {overall_max:.6f}")
-        
-        report_lines.append("  Min/Max per channel:")
-        for ch_idx in range(num_channels):
-            channel_data = all_acts_tensor[:, ch_idx, :, :]
-            report_lines.append(f"    Channel {ch_idx:03d}: Min={channel_data.min().item():.6f}, Max={channel_data.max().item():.6f}")
+        for sae_id in sae_ids:
+            if collected_sae_features.get(sae_id):
+                all_sae_features = torch.cat(collected_sae_features[sae_id], dim=0)
+                sae_min = all_sae_features.min().item()
+                sae_max = all_sae_features.max().item()
+                sae_mean = all_sae_features.mean().item()
+                sae_std = all_sae_features.std().item()
+                
+                # Count non-zero activations for sparsity analysis
+                non_zero_count = (all_sae_features != 0).sum().item()
+                total_count = all_sae_features.numel()
+                sparsity_ratio = non_zero_count / total_count
+                
+                report_lines.append(f"\n{sae_id}:")
+                report_lines.append(f"  Min: {sae_min:.6f}")
+                report_lines.append(f"  Max: {sae_max:.6f}")
+                report_lines.append(f"  Mean: {sae_mean:.6f}")
+                report_lines.append(f"  Std: {sae_std:.6f}")
+                report_lines.append(f"  Non-zero ratio: {sparsity_ratio:.4f} ({non_zero_count}/{total_count})")
+                report_lines.append(f"  Shape: {all_sae_features.shape}")
+            else:
+                report_lines.append(f"\n{sae_id}: No data collected")
 
-    for sae_id, features_list in collected_sae_features.items():
-        sae_checkpoint_info = SAE_INFO_DEFAULT[sae_id]
-        if not features_list:
-            report_lines.append(f"\n--- SAE: {sae_id} (Input: {sae_checkpoint_info['base_layer_name']}) ---")
-            report_lines.append("  No SAE feature activations collected.")
-            continue
+    # Summary table
+    report_lines.append("\n" + "="*80)
+    report_lines.append("QUICK REFERENCE TABLE - MIN/MAX VALUES:")
+    report_lines.append("="*80)
+    report_lines.append(f"{'SAE ID':<35} {'Layer':<10} {'Min':<12} {'Max':<12} {'Non-zero %':<12}")
+    report_lines.append("-" * 80)
+    
+    for base_layer_name, sae_ids in sae_by_layer.items():
+        for sae_id in sae_ids:
+            if collected_sae_features.get(sae_id):
+                all_sae_features = torch.cat(collected_sae_features[sae_id], dim=0)
+                sae_min = all_sae_features.min().item()
+                sae_max = all_sae_features.max().item()
+                non_zero_count = (all_sae_features != 0).sum().item()
+                total_count = all_sae_features.numel()
+                sparsity_ratio = non_zero_count / total_count * 100
+                
+                report_lines.append(f"{sae_id:<35} {base_layer_name:<10} {sae_min:<12.6f} {sae_max:<12.6f} {sparsity_ratio:<12.2f}")
 
-        all_features_tensor = torch.cat(features_list, dim=0)
-        num_sae_features = all_features_tensor.shape[1] 
+    report_lines.append("="*80)
 
-        report_lines.append(f"\n--- SAE: {sae_id} (Input: {sae_checkpoint_info['base_layer_name']}, {num_sae_features} features) ---")
-        report_lines.append(f"  SAE Path: {sae_checkpoint_info['path']}")
-        report_lines.append(f"  Shape of all collected SAE features: {all_features_tensor.shape}")
-
-        overall_min = all_features_tensor.min().item()
-        overall_max = all_features_tensor.max().item()
-        report_lines.append(f"  Overall Min Feature Activation: {overall_min:.6f}")
-        report_lines.append(f"  Overall Max Feature Activation: {overall_max:.6f}")
-
-        report_lines.append("  Min/Max per feature:")
-        for feat_idx in range(num_sae_features):
-            feature_data = all_features_tensor[:, feat_idx, :, :] 
-            report_lines.append(f"    Feature {feat_idx:04d}: Min={feature_data.min().item():.6f}, Max={feature_data.max().item():.6f}")
-            
-    print("\n" + "\n".join(report_lines))
-
-    try:
-        with open(args.output_report_file, "w") as f:
-            f.write("\n".join(report_lines))
-        print(f"\nReport saved to {args.output_report_file}")
-    except Exception as e:
-        print(f"\nError saving report to {args.output_report_file}: {e}")
+    # Write report to file
+    report_content = "\n".join(report_lines)
+    with open(args.output_report_file, 'w') as f:
+        f.write(report_content)
+    
+    print(f"Comprehensive activation report saved to: {args.output_report_file}")
+    print("\nREPORT PREVIEW:")
+    print("-" * 50)
+    # Print the summary table for quick viewing
+    summary_start = None
+    summary_end = None
+    for i, line in enumerate(report_lines):
+        if "QUICK REFERENCE TABLE" in line:
+            summary_start = i
+        elif summary_start and line.startswith("="*80) and i > summary_start + 5:
+            summary_end = i + 1
+            break
+    
+    if summary_start and summary_end:
+        for line in report_lines[summary_start:summary_end]:
+            print(line)
 
 if __name__ == "__main__":
     main() 
