@@ -11,12 +11,7 @@ from pathlib import Path
 
 # --- Configuration --- (Can be moved to args or kept as defaults)
 TARGET_ENTITIES = ['gem', 'blue_key', 'green_key', 'red_key'] # Entities to plot
-ENTITY_COLORS = { # Entity-specific colors for potential bar chart
-    'gem': 'gold',
-    'blue_key': 'royalblue',
-    'green_key': 'forestgreen',
-    'red_key': 'firebrick'
-}
+
 # -------------------
 
 def parse_args():
@@ -26,7 +21,7 @@ def parse_args():
                         help="Directory containing the per-channel result CSV files.")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Directory to save the plots. Defaults to results_dir.")
-    parser.add_argument("--file_pattern", type=str, default="results_layer*.csv",
+    parser.add_argument("--file_pattern", type=str, default="results_*.csv",
                         help="Glob pattern to find the per-channel CSV files.")
     parser.add_argument("--plot_title_prefix", type=str, default="Ablation Results",
                         help="Prefix for plot titles.")
@@ -66,9 +61,9 @@ def load_and_process_data(results_dir, file_pattern):
     df = pd.concat(df_list, ignore_index=True)
     print(f"Combined data has {len(df)} rows.")
 
-    # --- Data Processing --- 
-    # Ensure required columns exist (removed ended_by_gem)
-    required_cols = ['channel_kept', 'trial', 'initial_entities', 'remaining_entities']
+    # --- Data Processing ---
+    # Ensure required columns exist
+    required_cols = ['channel_kept', 'trial', 'initial_entities', 'remaining_entities', 'collected_entities', 'ended_by_gem']
     if not all(col in df.columns for col in required_cols):
         print(f"Error: Missing one or more required columns in combined CSV: {required_cols}")
         missing = [col for col in required_cols if col not in df.columns]
@@ -84,6 +79,8 @@ def load_and_process_data(results_dir, file_pattern):
     # Fill NaNs in entity strings
     df['initial_entities'] = df['initial_entities'].fillna('')
     df['remaining_entities'] = df['remaining_entities'].fillna('')
+    df['collected_entities'] = df['collected_entities'].fillna('') # Add for collected_entities
+    df['ended_by_gem'] = df['ended_by_gem'].fillna(False) # Fill NaN for ended_by_gem with False
 
     # Helper function to convert string to set
     def str_to_set(entity_str):
@@ -94,13 +91,16 @@ def load_and_process_data(results_dir, file_pattern):
     # Create set columns for efficient checking
     initial_sets = df['initial_entities'].apply(str_to_set)
     remaining_sets = df['remaining_entities'].apply(str_to_set)
+    collected_sets = df['collected_entities'].apply(str_to_set) # Parse collected_entities
 
-    # Re-calculate collection status based purely on initial vs remaining
-    print("Re-calculating collection status based *only* on initial vs remaining sets...")
+    # Use the 'collected_entities' column from the CSV, which should be accurate
+    # The 'channel_ablation_sweep.py' script already processes 'ended_by_gem'
+    # to determine the final 'collected_entities' set.
+    print("Using 'collected_entities' field from CSVs for collection status...")
     for entity in TARGET_ENTITIES:
         col_name = f'collected_{entity}'
-        # Collected if initially present AND *not* remaining
-        df[col_name] = (initial_sets.apply(lambda s: entity in s)) & (~remaining_sets.apply(lambda s: entity in s))
+        # An entity is counted as collected if its name is in the 'collected_sets' for that trial
+        df[col_name] = collected_sets.apply(lambda s: entity in s)
 
     # Group by channel and sum the boolean columns to get counts
     agg_counts = df.groupby('channel_kept')[[f'collected_{entity}' for entity in TARGET_ENTITIES]].sum()
@@ -127,24 +127,39 @@ def plot_heatmap(agg_counts_df, num_trials, output_dir, title_prefix):
         print("Cannot plot heatmap: No aggregated data.")
         return
 
-    plt.figure(figsize=(max(20, agg_counts_df.shape[0] * 0.15), 6))
+    # Revert multiplier to 0.2, reduce minimum width from 20 to 15
+    plt.figure(figsize=(max(15, agg_counts_df.shape[0] * 0.2), 8))
     
-    # Calculate frequency for heatmap colors, but annotate with counts
-    agg_freq_df = agg_counts_df / num_trials 
+    agg_freq_df = agg_counts_df / num_trials
+    # Increased annotation text size from 10 to 12
+    annot_kws = {"size": 12}
+    
+    # Define label text here, remove unsupported 'label_size' from cbar_kws
+    cbar_label = f'Collection Frequency (Count / {num_trials} trials)'
+    cbar_kws_adjusted = {'label': cbar_label}
 
-    sns.heatmap(agg_freq_df.T, # Transpose for channels on x-axis, entities on y
-                annot=agg_counts_df.T, # Annotate with the raw counts
-                fmt="d",           # Format annotations as integers
-                cmap="viridis",    # Colormap (can change)
-                linewidths=.5,
-                linecolor='lightgray',
-                cbar_kws={'label': f'Collection Frequency (Count / {num_trials} trials)'})
+    # Draw the heatmap and capture the axes object
+    ax = sns.heatmap(agg_freq_df.T, 
+                     annot=agg_counts_df.T, 
+                     fmt="d",           
+                     cmap="viridis",    
+                     linewidths=.5,
+                     linecolor='lightgray',
+                     annot_kws=annot_kws, 
+                     cbar_kws=cbar_kws_adjusted)
 
-    plt.title(f'{title_prefix}: Entity Collection Counts per Active Channel', fontsize=16)
-    plt.xlabel("Channel Kept Active (Ablating Others)", fontsize=12)
-    plt.ylabel("Entity Type", fontsize=12)
-    plt.xticks(rotation=90, fontsize=8)
-    plt.yticks(rotation=0)
+    # Set the colorbar label size *after* it has been created
+    # Access the colorbar object through the axes collections
+    if ax.collections:
+        colorbar = ax.collections[0].colorbar
+        if colorbar:
+            colorbar.ax.yaxis.label.set_size(14) # Set the font size for the label
+
+    plt.title(f'{title_prefix}: Entity Collection Counts per Active Channel', fontsize=20)
+    plt.xlabel("Channel Kept Active (Ablating Others)", fontsize=16)
+    plt.ylabel("Entity Type", fontsize=16)
+    plt.xticks(rotation=90, fontsize=12)
+    plt.yticks(rotation=0, fontsize=12)
     plt.tight_layout()
 
     plot_filename = os.path.join(output_dir, f"{title_prefix.replace(' ', '_')}_heatmap.png")
@@ -161,8 +176,16 @@ def main():
     agg_data, num_trials = load_and_process_data(args.results_dir, args.file_pattern)
 
     if agg_data is not None:
-        plot_heatmap(agg_data, num_trials, args.output_dir, args.plot_title_prefix)
-        # Add calls to other plotting functions here later (e.g., plot_stacked_bar)
+        # Filter out channels with zero counts across all entities
+        print(f"Original channel count: {len(agg_data)}")
+        agg_data_filtered = agg_data[agg_data.sum(axis=1) > 10] # Exclude channels with sum <= 5
+        print(f"Filtered channel count (sum > 5): {len(agg_data_filtered)}")
+
+        if agg_data_filtered.empty:
+            print("Warning: All channels have zero or one counts after filtering. No heatmap will be generated.")
+        else:
+            plot_heatmap(agg_data_filtered, num_trials, args.output_dir, args.plot_title_prefix)
+            # Add calls to other plotting functions here later (e.g., plot_stacked_bar)
 
 if __name__ == "__main__":
     main() 
