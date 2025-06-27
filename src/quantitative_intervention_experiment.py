@@ -109,10 +109,10 @@ def parse_args():
     parser.add_argument("--intervention_radius", type=int, default=1,
                         help="Radius for the intervention patch (0 for single point)")
     parser.add_argument("--channels", type=str, default=None,
-                        help="Comma-separated list of specific channel indices to run (e.g., '0,10,20'). If None, all channels for the layer are run.")
+                        help="Comma-separated list of specific channel indices to run (e.g., '0,10,20'). If None, all channels for the layer are run. Overridden by --start_channel/--end_channel if they are provided.")
 
     # Modified Intervention Value Argument
-    parser.add_argument("--intervention_value", type=str, default="0,3",
+    parser.add_argument("--intervention_value", type=str, default="0,0.7",
                         help="Intervention value. Either a fixed float (e.g., '3.0') or a range 'min,max' (e.g., '0,3') to iterate over trials.")
 
     # Output Configuration
@@ -120,6 +120,12 @@ def parse_args():
                         help="Directory to save results (CSV and plots)")
     parser.add_argument("--num_top_channels_visualize", type=int, default=20,
                          help="Number of top channels to include in the result visualization")
+
+    # New arguments for parallel execution by a worker
+    parser.add_argument("--start_channel", type=int, default=None,
+                        help="Start channel index for this worker (inclusive). Overrides --channels if set.")
+    parser.add_argument("--end_channel", type=int, default=None,
+                        help="End channel index for this worker (exclusive). Overrides --channels if set.")
 
     args = parser.parse_args()
 
@@ -621,6 +627,19 @@ def main():
         channels_to_run = list(range(num_channels)) # Run all channels from 0 to num_channels-1
         print(f"Will run experiment for all {num_channels} channels in layer '{layer_name}'.")
 
+    # Override with start_channel and end_channel if provided (for worker process)
+    if args.start_channel is not None and args.end_channel is not None:
+        if not (0 <= args.start_channel < num_channels and 0 < args.end_channel <= num_channels and args.start_channel < args.end_channel):
+            raise ValueError(
+                f"Invalid --start_channel ({args.start_channel}) or --end_channel ({args.end_channel}) for {num_channels} total channels."
+                f" Ensure 0 <= start_channel < end_channel <= num_channels."
+            )
+        channels_to_run = list(range(args.start_channel, args.end_channel))
+        print(f"Worker process: Overriding channel selection. Will run for channels {args.start_channel} to {args.end_channel -1}.")
+        if args.channels:
+            print(f"Note: --channels argument ('{args.channels}') was ignored due to --start_channel/--end_channel being set.")
+
+
     if not channels_to_run:
         print("Warning: No channels selected to run. Exiting.")
         return # Exit if no channels are to be processed
@@ -645,7 +664,12 @@ def main():
     else:
         value_str = f"val{args.intervention_value}"
 
-    intervention_log_filename = os.path.join(args.output_dir, f"intervention_reached_log_{safe_layer_name}_{value_str}_{timestamp_str}.csv")
+    # Modify filenames to include channel range if this is a worker
+    worker_id_str = ""
+    if args.start_channel is not None and args.end_channel is not None:
+        worker_id_str = f"_worker_{args.start_channel}-{args.end_channel-1}"
+
+    intervention_log_filename = os.path.join(args.output_dir, f"intervention_reached_log_{safe_layer_name}_{value_str}{worker_id_str}_{timestamp_str}.csv")
     intervention_log_enabled = False
     try:
         with open(intervention_log_filename, 'w') as f_log:
@@ -779,7 +803,7 @@ def main():
     print("\nExperiment loop complete. Saving results...")
     results_df = pd.DataFrame(results)
     safe_layer_name = layer_name.replace('.', '_').replace('/', '_')
-    csv_filename = os.path.join(args.output_dir, f"quantitative_results_{safe_layer_name}_{'sae' if args.is_sae else 'base'}.csv")
+    csv_filename = os.path.join(args.output_dir, f"quantitative_results_{safe_layer_name}_{'sae' if args.is_sae else 'base'}{worker_id_str}.csv")
     results_df.to_csv(csv_filename, index=False)
     print(f"Results saved to {csv_filename}")
 
@@ -848,7 +872,22 @@ def main():
             # --- Plotting Loop (Per-Entity and Overall) ---
             success_rate_filtered_cols = success_rate.reindex(columns=top_channels, fill_value=0)
             entity_names_sorted = sorted([ENTITY_CODE_DESCRIPTION[code] for code in args.target_entities])
-            channel_labels = sorted(top_channels.tolist())
+            # channel_labels = sorted(top_channels.tolist()) # Replaced below
+            
+            # Use channels_to_run for labeling if fewer than top_channels visualized or if specific channels were run
+            if args.start_channel is not None and args.end_channel is not None:
+                # If worker, plots are for its specific range
+                plot_channel_subset_info = f"_channels_{args.start_channel}-{args.end_channel-1}"
+                # For workers, top_channels might be misleading if it's based on global stats they don't see
+                # So, we'll ensure plots are made for the channels the worker actually processed, if they made it to top_channels
+                # However, the current `top_channels` is derived *from this worker's data only*.
+                # So, `top_channels` is already appropriate for this worker.
+                channel_labels = sorted(top_channels.tolist()) if not top_channels.empty else []
+            else:
+                # If not a worker, or if all channels run by worker, top_channels is fine
+                plot_channel_subset_info = ""
+                channel_labels = sorted(top_channels.tolist()) if not top_channels.empty else []
+
 
             for target_name in entity_names_sorted:
                 # Entity-specific directory
@@ -868,7 +907,7 @@ def main():
                     ax_overall.set_xticks([])
                     ax_overall.set_xticklabels([])
                 fig_overall.tight_layout()
-                overall_plot_filename = os.path.join(entity_plot_dir, f"overall_success_rate_{value_str}_{'sae' if args.is_sae else 'base'}_top{len(top_channels)}.png")
+                overall_plot_filename = os.path.join(entity_plot_dir, f"overall_success_rate_{value_str}_{'sae' if args.is_sae else 'base'}_top{len(top_channels)}{plot_channel_subset_info}.png")
                 fig_overall.savefig(overall_plot_filename)
                 print(f"Overall success rate plot saved to {overall_plot_filename}")
                 plt.close(fig_overall)
@@ -891,12 +930,12 @@ def main():
                     data_to_plot = success_rate_filtered_cols.loc[target_name]
                     data_to_plot = data_to_plot.reindex(channel_labels).fillna(0)
                     data_to_plot.plot(kind='bar', ax=ax_entity)
-                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - Top {len(channel_labels)} Channels")
+                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - Channels: {channel_labels if channel_labels else 'N/A'}")
                 else:
                     pd.Series(0, index=channel_labels).plot(kind='bar', ax=ax_entity, color='lightgrey')
-                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - No Success in Top Channels")
+                    ax_entity.set_title(f"Success Rate for Target: {target_name} ({layer_name})\n{value_title_str} - No Success in Processed Channels")
 
-                entity_plot_filename = os.path.join(entity_plot_dir, f"success_rate_{value_str}_{'sae' if args.is_sae else 'base'}.png")
+                entity_plot_filename = os.path.join(entity_plot_dir, f"success_rate_{value_str}_{'sae' if args.is_sae else 'base'}{plot_channel_subset_info}.png")
                 
                 fig_entity.tight_layout()
                 fig_entity.savefig(entity_plot_filename)
@@ -929,12 +968,12 @@ def main():
                 plt.xticks(rotation=45, ha='right')
                 plt.xlabel("Channel Index")
                 plt.ylabel("Successful Intervention Value Applied")
-                plt.title(f"Successful Intervention Values per Channel ({layer_name})\n{value_title_str} - Top {len(top_channels)} Channels")
+                plt.title(f"Successful Intervention Values per Channel ({layer_name})\n{value_title_str} - Channels: {channel_labels if channel_labels else 'N/A'}")
                 plt.legend(title='Target Entity', bbox_to_anchor=(1.05, 1), loc='upper left')
                 plt.grid(axis='x', linestyle='--', alpha=0.6)
                 plt.tight_layout(rect=[0, 0, 0.9, 1])
                 
-                scatter_filename = os.path.join(scatter_plot_dir, f"successful_interventions_scatter_{value_str}_{'sae' if args.is_sae else 'base'}.png")
+                scatter_filename = os.path.join(scatter_plot_dir, f"successful_interventions_scatter_{value_str}_{'sae' if args.is_sae else 'base'}{plot_channel_subset_info}.png")
                 plt.savefig(scatter_filename, bbox_inches='tight')
                 print(f"Successful interventions scatter plot saved to {scatter_filename}")
                 plt.close()
