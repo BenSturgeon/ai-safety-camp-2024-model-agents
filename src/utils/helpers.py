@@ -19,6 +19,7 @@ import math
 import imageio
 import random
 import sys
+import torch
 
 sys.path.append("../")  # This is added so we can import from the source folder
 from policies_impala import ImpalaCNN
@@ -40,43 +41,7 @@ def get_device():
 
 device = get_device()
 
-ordered_layer_names = {
-    0: "conv_seqs",
-    1: "conv_seqs.0",
-    2: "conv_seqs.0.conv",
-    3: "conv_seqs.0.max_pool2d",
-    4: "conv_seqs.0.res_block0",
-    5: "conv_seqs.0.res_block0.conv0",
-    6: "conv_seqs.0.res_block0.conv1",
-    7: "conv_seqs.0.res_block1",
-    8: "conv_seqs.0.res_block1.conv0",
-    9: "conv_seqs.0.res_block1.conv1",
-    10: "conv_seqs.1",
-    11: "conv_seqs.1.conv",
-    12: "conv_seqs.1.max_pool2d",
-    13: "conv_seqs.1.res_block0",
-    14: "conv_seqs.1.res_block0.conv0",
-    15: "conv_seqs.1.res_block0.conv1",
-    16: "conv_seqs.1.res_block1",
-    17: "conv_seqs.1.res_block1.conv0",
-    18: "conv_seqs.1.res_block1.conv1",
-    19: "conv_seqs.2",
-    20: "conv_seqs.2.conv",
-    21: "conv_seqs.2.max_pool2d",
-    22: "conv_seqs.2.res_block0",
-    23: "conv_seqs.2.res_block0.conv0",
-    24: "conv_seqs.2.res_block0.conv1",
-    25: "conv_seqs.2.res_block1",
-    26: "conv_seqs.2.res_block1.conv0",
-    27: "conv_seqs.2.res_block1.conv1",
-    28: "hidden_fc",
-    29: "logits_fc",
-    30: "value_fc",
-}
 
-
-def get_ordered_layer_names():
-    return ordered_layer_names
 
 
 class ModelActivations:
@@ -143,7 +108,7 @@ class ModelActivations:
 def generate_action(model, obs, is_procgen_env=True):
     with t.no_grad():
         if len(obs.shape) == 3:
-            obs = np.expand_dims(obs, axis=0).to(device)
+            obs = np.expand_dims(obs, axis=0)
         if isinstance(obs, np.ndarray):
             obs = t.from_numpy(obs).float().to(device)
         elif isinstance(obs, t.Tensor):
@@ -197,24 +162,8 @@ def find_latest_model_checkpoint(base_dir):
     return latest_checkpoint
 
 def load_interpretable_model(
-    ImpalaCNN=interpretable_CNN, model_path="../model_interpretable.pt"
+    ImpalaCNN=interpretable_CNN, model_path="base_models/256_256_8_6101_1.pt"
 ):
-    env_name = "procgen:procgen-heist-v0"
-    env = gym.make(
-        env_name,
-        start_level=100,
-        num_levels=200,
-        render_mode="rgb_array",
-        distribution_mode="easy",
-    )
-    observation_space = env.observation_space
-    action_space = env.action_space.n
-    model = ImpalaCNN(observation_space, action_space)
-    model.load_from_file(model_path, device="cpu")
-    return model
-
-
-def load_model(ImpalaCNN=ImpalaCNN, model_path="../model_1400_latest.pt"):
     env_name = "procgen:procgen-heist-v0"
     env = gym.make(
         env_name,
@@ -831,7 +780,7 @@ def run_episode_and_save_as_gif(
     filepath="../gifs/run.gif",
     save_gif=False,
     episode_timeout=200,
-    is_procgen_env=True,
+    is_procgen_env=True
 ):
     model=model.to(device)
     observations = []
@@ -981,6 +930,140 @@ def run_episode_with_steering_and_check_target_acquisition(
         return True
     else:
         return False
+
+
+def run_episode_and_get_final_state(
+    venv,
+    model,
+    filepath="../gifs/run_final_state.gif", # Default to a different name
+    save_gif=False,
+    episode_timeout=200,
+    is_procgen_env=True
+):
+    """
+    Runs an episode in the environment using the provided model, captures the state
+    before the episode terminates, and optionally saves a GIF.
+
+    Args:
+        venv: The vectorized environment.
+        model: The policy model.
+        filepath (str): Path to save the GIF.
+        save_gif (bool): Whether to save a GIF of the episode.
+        episode_timeout (int): Maximum steps per episode.
+        is_procgen_env (bool): Flag indicating if it's a Procgen environment.
+
+    Returns:
+        tuple: Contains:
+            - total_reward (float): Sum of rewards for the episode.
+            - frames (list): List of environment frames if save_gif is True.
+            - last_state_bytes (bytes): State bytes captured before the final step.
+            - ended_by_gem (bool): True if the episode ended by collecting the gem.
+            - ended_by_timeout (bool): True if the episode ended due to timeout.
+    """
+    device = get_device() # Ensure device is defined
+    model.to(device)
+    model.eval()
+
+    obs = venv.reset()
+    frames = []
+    total_reward = 0
+    steps = 0
+    last_state_bytes = None
+    ended_by_gem = False
+    ended_by_timeout = False
+
+    while True:
+        # Capture state before taking the action
+        current_state_bytes = venv.env.callmethod("get_state")[0]
+
+        if isinstance(obs, dict):
+            obs_tensor = t.tensor(obs['rgb'], dtype=t.float32).to(device)
+        elif isinstance(obs, np.ndarray):
+            # Add batch dimension if missing (shape [C, H, W] -> [1, C, H, W])
+            if len(obs.shape) == 3:
+                 obs = np.expand_dims(obs, axis=0)
+            obs_tensor = t.tensor(obs, dtype=t.float32).to(device)
+        else:
+            # Assuming obs is already a tensor
+             obs_tensor = obs.to(device)
+
+        # Generate action
+        with t.no_grad():
+            outputs = model(obs_tensor)
+            # Handle different model output formats (tuple vs. direct logits)
+            logits = outputs[0].logits if isinstance(outputs, tuple) and hasattr(outputs[0], 'logits') else outputs.logits
+            probabilities = F.softmax(logits, dim=-1)
+            actions_tensor = t.multinomial(probabilities, num_samples=1).squeeze(-1)
+            actions = actions_tensor.cpu().numpy()
+
+        # Step environment
+        obs, reward, done, info = venv.step(actions)
+
+        # Accumulate reward and frames
+        # Handle reward potentially being an array (if venv has multiple envs, though usually 1 here)
+        current_reward = reward[0] if isinstance(reward, (list, np.ndarray)) else reward
+        total_reward += current_reward
+
+        if save_gif:
+            # Ensure frame is in CPU, numpy, and uint8 format for imageio
+            frame_to_save = obs['rgb'][0] if isinstance(obs, dict) else obs[0]
+            if isinstance(frame_to_save, t.Tensor):
+                frame_to_save = frame_to_save.cpu().numpy()
+            # Transpose if necessary (e.g., from C, H, W to H, W, C)
+            if frame_to_save.shape[0] == 3:
+                frame_to_save = frame_to_save.transpose(1, 2, 0)
+            # Scale to 0-255 if it's float (assuming 0-1 range)
+            if frame_to_save.dtype == np.float32 or frame_to_save.dtype == np.float64:
+                 frame_to_save = (frame_to_save * 255).astype(np.uint8)
+            else:
+                 frame_to_save = frame_to_save.astype(np.uint8)
+
+            frames.append(frame_to_save)
+
+
+        steps += 1
+
+        # Check for termination
+        is_done = done[0] if isinstance(done, (list, np.ndarray)) else done
+        current_info = info[0] if isinstance(info, (list, np.ndarray)) else info
+
+
+        if is_done or steps >= episode_timeout:
+            last_state_bytes = current_state_bytes # Store state *before* this step
+            if is_done:
+                ended_by_gem = True
+            else:
+
+                ended_by_timeout = True
+            break # Exit loop
+
+    # Save GIF if requested
+    if save_gif and frames:
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        print(f"Saving GIF with {len(frames)} frames to {filepath}...")
+        try:
+            enhanced_frames = []
+            for frame in frames:
+                fig, ax = plt.subplots(figsize=(10, 10))
+                ax.imshow(frame)
+                ax.axis('off')  # Hide axes
+                
+                fig.tight_layout(pad=0)
+                fig.canvas.draw()
+                enhanced_frame = np.array(fig.canvas.renderer.buffer_rgba())[:,:,:3]
+                enhanced_frames.append(enhanced_frame)
+                plt.close(fig)
+                
+            imageio.mimsave(filepath, enhanced_frames, fps=30)  
+            print(f"GIF saved successfully to {filepath}")
+        except Exception as e:
+            print(f"Error saving GIF: {e}")
+
+
+    # Note: venv is NOT closed here. Caller is responsible.
+
+    return total_reward, frames, last_state_bytes, ended_by_gem, ended_by_timeout
 
 
 def create_objective_activation_dataset(dataset, model, layer_paths):
@@ -1431,3 +1514,123 @@ def batch_generate_action_with_cache(
         actions = actions.reshape(-1, 1)
 
     return actions, activations
+
+
+def prepare_frame_for_gif(obs):
+    """
+    Prepares an observation frame for GIF creation.
+    Handles different observation formats (e.g., (1,C,H,W), (C,H,W), (H,W,C))
+    and ensures the output is HWC, uint8.
+    """
+    frame_to_store = None
+    if not isinstance(obs, np.ndarray):
+        print(f"[GIF_HELPER_WARN] Observation is not an ndarray: {type(obs)}")
+        return None
+
+    # Handle different obs ndim/shapes
+    if obs.ndim == 4 and obs.shape[0] == 1: # (1,C,H,W) e.g. from VecEnv
+        frame_to_store = obs[0] # Get (C,H,W)
+    elif obs.ndim == 3: # Either (C,H,W) or (H,W,C)
+        frame_to_store = obs
+    else:
+        print(f"[GIF_HELPER_WARN] Unexpected obs ndim for GIF: {obs.ndim}, shape: {obs.shape}")
+        return None
+
+    # Ensure HWC format for imageio
+    if frame_to_store.ndim == 3 and frame_to_store.shape[0] == 3: # (C,H,W)
+        frame_to_store = frame_to_store.transpose(1, 2, 0) # to (H,W,C)
+    elif frame_to_store.ndim == 3 and frame_to_store.shape[2] != 3: # (H,W,C) but C is not 3
+         print(f"[GIF_HELPER_WARN] Obs is (H,W,C) but C is not 3: {frame_to_store.shape}")
+         # Attempt to take first channel if grayscale-like with wrong channel dim
+         if frame_to_store.shape[2] > 0: # e.g. (H,W,4) take (H,W,0)
+             print(f"[GIF_HELPER_WARN] Taking first channel only.")
+             frame_to_store = frame_to_store[:,:,0] 
+         else: # No valid channel to pick
+            return None
+    elif frame_to_store.ndim != 3: # If it became 2D after channel selection or was already 2D
+        pass # Will be handled by grayscale check later
+    elif frame_to_store.ndim == 3 and frame_to_store.shape[2] == 3: # Already HWC
+        pass
+
+
+    # Normalize and convert to uint8 if float
+    # Procgen typically gives float observations in [0, 1] (due to ScaledFloatFrame)
+    # or uint8 in [0,255]
+    if frame_to_store.dtype == np.float32 or frame_to_store.dtype == np.float64:
+        if np.min(frame_to_store) >= 0 and np.max(frame_to_store) <= 1:
+             frame_to_store = (frame_to_store * 255).astype(np.uint8)
+        elif np.min(frame_to_store) >= 0 and np.max(frame_to_store) <= 255: # Already scaled but float
+             frame_to_store = frame_to_store.astype(np.uint8)
+        else: # Values out of expected range [0,1] or [0,255]
+            print(f"[GIF_HELPER_WARN] Float frame values out of expected range [0,1] or [0,255]. Min: {np.min(frame_to_store)}, Max: {np.max(frame_to_store)}. Clamping and scaling from [min,max] to [0,255].")
+            frame_min = np.min(frame_to_store)
+            frame_max = np.max(frame_to_store)
+            if frame_max > frame_min:
+                frame_to_store = 255 * (frame_to_store - frame_min) / (frame_max - frame_min)
+            else: # Max == Min, make it all mid-gray
+                frame_to_store = np.full_like(frame_to_store, 128)
+            frame_to_store = frame_to_store.astype(np.uint8)
+
+    elif frame_to_store.dtype != np.uint8:
+        print(f"[GIF_HELPER_WARN] Unexpected frame dtype: {frame_to_store.dtype}. Attempting direct cast to uint8.")
+        frame_to_store = frame_to_store.astype(np.uint8) # Hope for the best
+    
+
+    # Ensure 3 channels if it's grayscale (H,W) -> (H,W,1) -> (H,W,3)
+    if frame_to_store.ndim == 2: # Grayscale H,W
+        frame_to_store = np.stack((frame_to_store,)*3, axis=-1) # H,W,3
+    elif frame_to_store.ndim == 3 and frame_to_store.shape[2] == 1: # H,W,1
+        frame_to_store = np.concatenate([frame_to_store]*3, axis=2) # H,W,3
+
+
+    if not (isinstance(frame_to_store, np.ndarray) and frame_to_store.ndim == 3 and frame_to_store.shape[2] == 3):
+        print(f"[GIF_HELPER_ERROR] Final frame is not HWC with 3 channels. Shape: {frame_to_store.shape if isinstance(frame_to_store, np.ndarray) else 'Not ndarray'}, Dtype: {frame_to_store.dtype if isinstance(frame_to_store, np.ndarray) else 'Not ndarray'}")
+        return None
+
+    return frame_to_store
+
+
+def process_observation_for_model(obs, device):
+    """
+    Processes an environment observation for model input.
+    Converts to a PyTorch tensor, ensures float32, adds batch dim if needed, and moves to device.
+    Assumes obs is a NumPy array, typically (C,H,W) or (H,W,C) from environment.
+    Procgen models often expect (N,C,H,W) float input.
+    """
+    if not isinstance(obs, np.ndarray):
+        # If it's a batched observation already as a tensor (e.g. from another process),
+        # ensure it's on the right device.
+        if torch.is_tensor(obs):
+            return obs.to(device)
+        else:
+            print(f"[PROCESS_OBS_WARN] Observation is not a NumPy array or tensor: {type(obs)}. Attempting direct tensor conversion.")
+            # Fallback: try to convert directly, this might fail or be incorrect
+            try:
+                obs_tensor = torch.tensor(obs, dtype=torch.float32)
+            except Exception as e:
+                print(f"[PROCESS_OBS_ERROR] Could not convert obs of type {type(obs)} to tensor: {e}")
+                raise
+            # Continue with tensor processing, assuming it's now a tensor
+    else: # It's a NumPy array
+        obs_tensor = torch.tensor(obs, dtype=torch.float32)
+
+    # Ensure CHW format if it's HWC (common for single observation from env.step)
+    # Model usually expects (N,C,H,W)
+    if obs_tensor.ndim == 3 and obs_tensor.shape[-1] == 3:  # HWC
+        obs_tensor = obs_tensor.permute(2, 0, 1)  # Convert to CHW
+    elif obs_tensor.ndim == 3 and obs_tensor.shape[0] != 3 and obs_tensor.shape[-1] !=3 :
+        print(f"[PROCESS_OBS_WARN] 3D obs tensor has ambiguous channel dim: {obs_tensor.shape}. Assuming CHW if first dim is small, else error.")
+        if obs_tensor.shape[0] <= 4: # Heuristic for channels-first (e.g. 1 or 3 channels)
+             pass # Assumed CHW
+        else: # Likely HWC but channel not last, or incorrect format
+            raise ValueError(f"Unsupported 3D observation shape for model processing: {obs_tensor.shape}. Expecting CHW or HWC.")
+
+
+    # Add batch dimension if it's a single observation (C,H,W)
+    if obs_tensor.ndim == 3:
+        obs_tensor = obs_tensor.unsqueeze(0)  # Add batch dimension -> (1,C,H,W)
+    
+    if obs_tensor.ndim != 4:
+        raise ValueError(f"Observation tensor for model must be 4D (N,C,H,W), but got shape {obs_tensor.shape}")
+
+    return obs_tensor.to(device)
