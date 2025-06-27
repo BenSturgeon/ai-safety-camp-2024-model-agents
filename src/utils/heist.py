@@ -73,6 +73,7 @@ WORLD_DIM = 25
 EMPTY = 100
 BLOCKED = 51
 GEM= 9
+KEY_ON_RING = 11  # HUD key icon entity
 
 
 HEIST_STATE_DICT_TEMPLATE = [
@@ -190,7 +191,8 @@ HEIST_STATE_DICT_TEMPLATE = [
     ["loop", "data", "data.size", [["int", "i"]]],
     ["int", "num_keys"],
     ["int", "world_dim"],
-    ["loop", "has_keys", "num_keys", [["int", "key_state"]]],
+    ["int", "_has_keys_size"],
+    ["loop", "has_keys", "_has_keys_size", [["int", "key_state"]]],
     ["int", "num_locked_doors"],
     ["loop", "locked_doors", "num_locked_doors", [
         ["float", "x"],
@@ -730,6 +732,79 @@ class EnvState:
                 on_screen_entities.append(entity_data)
         return on_screen_entities
     
+    def set_ring_key_position(self, colour_idx: int, x: float, y: float):
+        """Move the HUD key icon (KEY_ON_RING) for given colour to normalized screen coords (x,y)."""
+        KEY_ON_RING = 11
+        state_vals = self.state_vals  # Get fresh reference at start
+        for ent in state_vals["ents"]:
+            if ent["type"].val == KEY_ON_RING and ent["image_theme"].val == colour_idx:
+                ent["x"].val = float(x)
+                ent["y"].val = float(y)
+                break
+        self.state_bytes = _serialize_maze_state(state_vals)
+
+    def set_hud_keys(self, blue_visible=False, green_visible=False, red_visible=False, use_natural_positions=True):
+        """
+        Show/hide HUD key icons with simple boolean flags.
+        
+        Now that we've fixed the template with the missing length field, this works perfectly:
+        - has_keys[0] = 0/1 (blue key flag)
+        - has_keys[1] = 0/1 (green key flag)  
+        - has_keys[2] = 0/1 (red key flag)
+        
+        Args:
+            blue_visible (bool): Whether blue key icon should be visible. Default False.
+            green_visible (bool): Whether green key icon should be visible. Default False.
+            red_visible (bool): Whether red key icon should be visible. Default False.
+            use_natural_positions (bool): If True, positions keys at their natural game locations
+                                        in the top-right corner. Default True.
+        
+        Example:
+            # Show blue and red keys
+            state.set_hud_keys(blue_visible=True, red_visible=True)
+            venv.env.callmethod("set_state", [state.state_bytes])
+            
+            # Show all three keys
+            state.set_hud_keys(blue_visible=True, green_visible=True, red_visible=True)
+            venv.env.callmethod("set_state", [state.state_bytes])
+            
+            # Hide all keys  
+            state.set_hud_keys()
+            venv.env.callmethod("set_state", [state.state_bytes])
+        """
+        KEY_ON_RING = 11
+        
+        # Natural HUD key positions (discovered from gameplay analysis)
+        NATURAL_POSITIONS = {
+            0: (0.962, 0.022),  # Blue key - rightmost
+            1: (0.902, 0.022),  # Green key - middle
+            2: (0.843, 0.022),  # Red key - leftmost
+        }
+        
+        # Get fresh state_vals reference (CRITICAL working pattern)
+        state_vals = self.state_vals
+        
+        # Position HUD keys in natural locations if requested
+        if use_natural_positions:
+            for ent in state_vals["ents"]:
+                if ent["type"].val == KEY_ON_RING:
+                    theme = ent["image_theme"].val
+                    if theme in NATURAL_POSITIONS:
+                        x, y = NATURAL_POSITIONS[theme]
+                        ent["x"].val = float(x)
+                        ent["y"].val = float(y)
+        
+        # Set the boolean flags directly - simple and clean!
+        # Leave num_keys and _has_keys_size alone, only touch the actual flags
+        if len(state_vals["has_keys"]) >= 1:  # Blue key slot
+            state_vals["has_keys"][0]["key_state"].val = 1 if blue_visible else 0
+        if len(state_vals["has_keys"]) >= 2:  # Green key slot  
+            state_vals["has_keys"][1]["key_state"].val = 1 if green_visible else 0
+        if len(state_vals["has_keys"]) >= 3:  # Red key slot
+            state_vals["has_keys"][2]["key_state"].val = 1 if red_visible else 0
+        
+        # Serialize using the working pattern
+        self.state_bytes = _serialize_maze_state(state_vals)
 
 
 
@@ -946,7 +1021,9 @@ def _serialize_maze_state(state_vals: StateValues, assert_=DEBUG) -> bytes:
             raise ValueError(f"type(val)={type(val)} not handled")
 
     # Flatten the nested values into a single list of primitives
-    def flatten_vals(vals, flat_list=[]):
+    def flatten_vals(vals, flat_list=None):
+        if flat_list is None:
+            flat_list = []
         if isinstance(vals, dict):
             for val in vals.values():
                 flatten_vals(val, flat_list)
