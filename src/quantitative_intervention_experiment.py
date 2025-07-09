@@ -98,8 +98,8 @@ def parse_args():
                         help="Flag indicating the layer_spec refers to an SAE layer number")
 
     # Experiment Parameters
-    parser.add_argument("--target_entities", type=str, default="gem,blue_key,green_key,red_key",
-                        help="Comma-separated list of entity names to target (e.g., 'gem,blue_key')")
+    parser.add_argument("--target_entities", type=str, default="gem,blue_key,green_key,red_key,blue_lock,green_lock,red_lock",
+                        help="Comma-separated list of entity names to target (e.g., 'gem,blue_key,blue_lock')")
     parser.add_argument("--num_trials", type=int, default=10,
                         help="Number of trials per channel")
     parser.add_argument("--max_steps", type=int, default=20,
@@ -698,15 +698,74 @@ def main():
             # Venv creation is now INSIDE the trial loop
             # try/finally for venv closing will also be inside the trial loop
 
-            # Intervention Trials Loop
-            for trial in range(args.num_trials):
-                venv_for_this_trial = None # Initialize venv for this specific trial
-                try:
-                    # Create the environment FOR EACH TRIAL to get new seed sampling
-                    # This assumes create_box_maze (and thus create_custom_maze_sequence)
-                    # will now sample a new seed from the loaded list internally.
-                    observations, venv_for_this_trial = create_box_maze(**env_args)
+            # ------------------------------------------------------------------
+            # Intervention Trials Loop  (with retry on missing target entity)
+            # ------------------------------------------------------------------
+            MAX_MISSING_RETRIES = 5  # how many new envs to sample if target entity absent
 
+            # Helper to map entity code to (type, theme)
+            def _entity_type_theme(code):
+                if code == 3:
+                    return (9, 0)   # gem
+                if code == 4:
+                    return (2, 0)   # blue key
+                if code == 5:
+                    return (2, 1)   # green key
+                if code == 6:
+                    return (2, 2)   # red key
+                if code == 7:
+                    return (1, 0)   # blue lock
+                if code == 8:
+                    return (1, 1)   # green lock
+                if code == 9:
+                    return (1, 2)   # red lock
+                raise ValueError(f"Unknown entity code: {code}")
+
+            target_type_chk, target_theme_chk = _entity_type_theme(target_entity_code)
+
+            for trial in range(args.num_trials):
+                retries_left = MAX_MISSING_RETRIES
+                venv_for_this_trial = None
+                initial_target_found = False
+
+                # Retry loop to ensure target entity exists in the initial state
+                while retries_left > 0:
+                    if venv_for_this_trial is not None:
+                        venv_for_this_trial.close()
+
+                    observations, venv_for_this_trial = create_box_maze(**env_args)
+                    state_initial_chk = heist.state_from_venv(venv_for_this_trial, 0)
+
+                    if state_initial_chk.get_entity_position(target_type_chk, target_theme_chk) is not None:
+                        initial_target_found = True
+                        break  # entity exists; proceed with trial
+
+                    retries_left -= 1
+
+                if not initial_target_found:
+                    # Record a missing-entity outcome and continue to next trial
+                    results.append({
+                        "layer_name": layer_name,
+                        "layer_is_sae": args.is_sae,
+                        "sae_layer_number": layer_number if args.is_sae else None,
+                        "channel": channel_index,
+                        "trial": trial + 1,
+                        "target_entity_code": target_entity_code,
+                        "target_entity_name": target_entity_name,
+                        "outcome": "missing_entity_initial",
+                        "target_acquired": False,
+                        "initial_target_pos_y": -1,
+                        "initial_target_pos_x": -1,
+                        "final_player_pos_y": -1,
+                        "final_player_pos_x": -1,
+                        "intervention_value": None,
+                        "intervention_radius": args.intervention_radius,
+                        "intervention_pos_y": args.intervention_position[0],
+                        "intervention_pos_x": args.intervention_position[1],
+                    })
+                    continue  # skip run_simulation for this trial
+
+                try:
                     # --- Determine Intervention Value ---
                     intervention_value = None
                     if hasattr(args, 'intervention_is_range') and args.intervention_is_range:
