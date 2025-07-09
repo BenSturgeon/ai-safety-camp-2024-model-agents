@@ -240,6 +240,83 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
                             "position": (i, j)  # Store intuitive coordinates
                         })
         
+        # ------------------------------------------------------------------
+        # Ensure hidden key for locks
+        # ------------------------------------------------------------------
+        # If the current maze pattern contains any lock entities (blue/green/red),
+        # we also need the corresponding key to be present somewhere in the
+        # environment so that the lock can be opened by the agent. We place the
+        # matching key in the *top-right* corner of the custom maze (intuitive
+        # coordinates: (maze_size-1, maze_size-1)).
+        lock_colors_present = {ent["color"] for ent in entities if ent["type"] == "lock"}
+        keys_colors_present = {ent["color"] for ent in entities if ent["type"] == "key"}
+        
+        if lock_colors_present:
+            # Pre-compute a list of fallback positions in case we need more than
+            # one hidden key (rare in current usage, but future-proof).
+            potential_positions = [
+                (maze_size - 1, maze_size - 1),  # top-right
+                (maze_size - 1, 0),              # top-left
+                (0, maze_size - 1)               # bottom-right (intuitive)
+            ]
+            pos_idx = 0
+            for color in sorted(lock_colors_present):
+                # Skip if a key of this colour already exists in the pattern.
+                if any(e["type"] == "key" and e["color"] == color for e in entities):
+                    continue
+
+                # Choose a placement cell (wrap if more keys than positions)
+                intuitive_y, intuitive_x = potential_positions[pos_idx % len(potential_positions)]
+                pos_idx += 1
+
+                # Convert to actual grid coordinate and carve the cell as empty.
+                actual_i = convert_y_coord(intuitive_y)
+                new_grid[start_y + actual_i, start_x + intuitive_x] = EMPTY
+
+                # Add the key entity specification so it is placed later.
+                entities.append({
+                    "type": "key",
+                    "color": color,
+                    "position": (intuitive_y, intuitive_x)
+                })
+                # Track that we've added this key color
+                keys_colors_present.add(color)
+        
+        # ------------------------------------------------------------------
+        # Control HUD key visibility based on progressive key collection logic
+        # ------------------------------------------------------------------
+        # In Heist, keys must be collected in order: blue -> green -> red
+        # If a red lock is present, agent needs blue+green+red keys to open it
+        # If a green lock is present, agent needs blue+green keys to open it
+        # If a blue lock is present, agent needs blue key to open it
+        hud_keys_needed = set()
+        
+        # Determine which HUD keys should be visible based on locks present
+        if "red" in lock_colors_present:
+            # Red lock requires all three keys collected in sequence
+            hud_keys_needed.update(["blue", "green", "red"])
+        elif "green" in lock_colors_present:
+            # Green lock requires blue and green keys
+            hud_keys_needed.update(["blue", "green"])
+        elif "blue" in lock_colors_present:
+            # Blue lock requires only blue key
+            hud_keys_needed.add("blue")
+        
+        # Also show HUD keys for any keys that are explicitly present in the maze
+        # (even if there's no corresponding lock)
+        hud_keys_needed.update(keys_colors_present)
+        
+        # Store HUD key settings for later application when the state is finalized
+        hud_key_settings = None
+        if hud_keys_needed:
+            # Store HUD key settings as a local variable instead of trying to attach to list
+            hud_key_settings = {
+                "blue_visible": "blue" in hud_keys_needed,
+                "green_visible": "green" in hud_keys_needed,
+                "red_visible": "red" in hud_keys_needed
+            }
+        # ------------------------------------------------------------------
+        
         # Set the new grid layout
         state.set_grid(new_grid)
         
@@ -304,6 +381,21 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
             state_bytes = state.state_bytes
             if state_bytes is not None:
                 venv.env.callmethod("set_state", [state_bytes])
+        
+        # ------------------------------------------------------------------
+        # Apply HUD key visibility settings based on progressive key logic
+        # ------------------------------------------------------------------
+        # Apply the HUD key settings that were determined earlier
+        if hud_key_settings:
+            state = heist.state_from_venv(venv, 0)  # Get fresh state
+            state.set_hud_keys(
+                blue_visible=hud_key_settings.get("blue_visible", False),
+                green_visible=hud_key_settings.get("green_visible", False),
+                red_visible=hud_key_settings.get("red_visible", False)
+            )
+            # Apply the HUD key changes
+            venv.env.callmethod("set_state", [state.state_bytes])
+        # ------------------------------------------------------------------
         
         # Final reset to ensure all changes are applied
         obs = venv.reset()
@@ -394,16 +486,6 @@ def create_example_maze_sequence(entity1=4, entity2=None):
             [0, 3, 1, 1, 1, 1, 0],
             [0, 1, 0, 0, 0, 1, 0],
             [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 4, 1, 0],
-            [0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 2, 0, 0, 0]
-        ]),
-
-        np.array([
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 3, 1, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
             [0, 1, 1, 4, 1, 1, 0],
             [0, 0, 0, 1, 0, 0, 0],
             [0, 0, 0, 2, 0, 0, 0]
@@ -418,13 +500,13 @@ def create_example_maze_sequence(entity1=4, entity2=None):
             [0, 0, 0, 1, 0, 0, 0],
             [0, 0, 0, 2, 0, 0, 0]
         ]),
-        
+
         np.array([
             [0, 0, 0, 0, 0, 0, 0],
             [0, 3, 1, 1, 1, 1, 0],
             [0, 1, 0, 0, 0, 1, 0],
             [0, 1, 0, 0, 0, 1, 0],
-            [0, 4, 1, 1, 1, 1, 0],
+            [0, 1, 1, 4, 1, 1, 0],
             [0, 0, 0, 1, 0, 0, 0],
             [0, 0, 0, 2, 0, 0, 0]
         ]),

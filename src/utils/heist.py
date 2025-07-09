@@ -530,6 +530,15 @@ class EnvState:
             ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
     
+    def clear_entities(self):
+        """
+        Properly removes all entities from the state, by clearing the 'ents' list.
+        """
+        state_values = self.state_vals
+        state_values["ents"] = []
+        state_values["ents.size"].val = 0
+        self.state_bytes = _serialize_maze_state(state_values)
+
     def remove_gem(self):
         state_values = self.state_vals  
         for ents in state_values["ents"]:
