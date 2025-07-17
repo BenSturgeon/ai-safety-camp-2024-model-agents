@@ -305,7 +305,13 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
         # Also show HUD keys for any keys that are explicitly present in the maze
         # (even if there's no corresponding lock)
         hud_keys_needed.update(keys_colors_present)
-        
+
+        # Suppress HUD keys for colours that have a key but no lock.
+        # During key-only runs (e.g. blue_key, green_key, red_key targets),
+        # we don’t want the HUD to reveal the key icon.
+        keys_without_locks = keys_colors_present - lock_colors_present
+        hud_keys_needed -= keys_without_locks
+
         # Store HUD key settings for later application when the state is finalized
         hud_key_settings = None
         if hud_keys_needed:
@@ -471,16 +477,6 @@ def create_example_maze_sequence(entity1=4, entity2=None):
             [0, 0, 0, 2, 0, 0, 0]
         ]),
         
-        np.array([
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 3, 1, 1, 1, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 1, 1, 1, 1, 4, 0],
-            [0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 2, 0, 0, 0]
-        ]),
-
         np.array([
             [0, 0, 0, 0, 0, 0, 0],
             [0, 3, 1, 1, 1, 1, 0],
