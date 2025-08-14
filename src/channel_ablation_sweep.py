@@ -18,6 +18,7 @@ from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 
 # Keep environment creation if needed later, but heist.create_venv used now
 from src.utils.create_intervention_mazes import create_fork_maze, create_corners_maze
+from src.create_bias_corrected_fork_maze import create_bias_corrected_fork_maze, create_bias_corrected_corners_maze
 
 from utils.helpers import run_episode_and_get_final_state
 from utils.heist import (
@@ -154,6 +155,7 @@ def parse_args():
     parser.add_argument("--no_save_gifs", action="store_true", help="Disable saving a GIF for the first trial of each channel.")
     parser.add_argument("--total_channels_for_base_layer", type=int, default=None, help="Total channels in the base model layer, REQUIRED if not an SAE run (i.e., sae_checkpoint_path is not provided).")
     parser.add_argument("--maze_type", type=str, default="fork", choices=["fork", "corners"], help="Type of maze to use for the experiment.")
+    parser.add_argument("--bias_direction", type=str, default=None, choices=["up", "down", "left", "right"], help="Bias direction for maze orientation (optional).")
 
     args = parser.parse_args()
 
@@ -286,11 +288,17 @@ def main():
                 # --- Create Venv and Get Initial Entities FOR EACH TRIAL ---
                 # print(f"Creating new fork maze environment for Ch {channel_to_keep}, Trial {trial_idx}...", flush=True) # Optional debug
                 if args.maze_type == "fork":
-                    _, venv_trial = create_fork_maze() # Create fresh maze for each trial
+                    if args.bias_direction:
+                        _, venv_trial = create_bias_corrected_fork_maze(bias_direction=args.bias_direction)
+                    else:
+                        _, venv_trial = create_fork_maze() # Create fresh maze for each trial
                 elif args.maze_type == "corners":
-                    _, venv_trial = create_corners_maze() # Create fresh maze for each trial
+                    if args.bias_direction:
+                        _, venv_trial = create_bias_corrected_corners_maze(bias_direction=args.bias_direction)
+                    else:
+                        _, venv_trial = create_corners_maze() # Create fresh maze for each trial
                 else:
-                    parser.error(f"Invalid maze_type: {args.maze_type}")
+                    raise ValueError(f"Invalid maze_type: {args.maze_type}")
                 # print("Trial environment created.", flush=True) # Optional debug
 
                 # print("Determining initial entities for this trial...", flush=True) # Optional debug
