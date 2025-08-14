@@ -29,7 +29,7 @@ COLOR_IDX_TO_ENTITY_NAME = {
 }
 
 
-FEATURES_TO_ZERO = [i for i in range(128) if i not in [75]]
+FEATURES_TO_ZERO = [i for i in range(128) if i not in [44]]
 
 
 model = helpers.load_interpretable_model(model_path=f"../model_interpretable.pt").to(device)
@@ -134,9 +134,9 @@ if last_state_bytes:
     final_env_state = EnvState(last_state_bytes)
     final_state_vals = final_env_state.state_vals
 
-    # Check for gem
-    if final_env_state.count_entities(ENTITY_TYPES["gem"]) > 0:
-        final_entities.add(GEM)
+    # # Check for gem
+    # if final_env_state.count_entities(ENTITY_TYPES["gem"]) > 0:
+    #     final_entities.add(GEM)
     
     # Check for keys based on count
     for color_idx, entity_name in COLOR_IDX_TO_ENTITY_NAME.items():
