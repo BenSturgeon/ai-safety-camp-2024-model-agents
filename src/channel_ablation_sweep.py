@@ -18,7 +18,7 @@ from sae_cnn import load_sae_from_checkpoint, ordered_layer_names
 
 # Keep environment creation if needed later, but heist.create_venv used now
 from src.utils.create_intervention_mazes import create_fork_maze, create_corners_maze
-from src.create_bias_corrected_fork_maze import create_bias_corrected_fork_maze, create_bias_corrected_corners_maze
+from bias_corrected_mazes import create_bias_corrected_fork_maze, create_bias_corrected_corners_maze
 
 from utils.helpers import run_episode_and_get_final_state
 from utils.heist import (

@@ -197,6 +197,15 @@ class BatchedInterventionExperiment:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
+        # --- Critical: Ensure correctness for ranged interventions ---
+        if self.args.intervention_is_range and self.args.num_parallel_envs > 1:
+            print(f"\n[WARNING] Ranged intervention values (--intervention_value='{self.args.intervention_value}') require each trial to receive a unique value.")
+            print(f"          To ensure experimental correctness, num_parallel_envs has been overridden from {self.args.num_parallel_envs} to 1 for this run.")
+            print(f"          This means trials will be processed sequentially for intervention application.")
+            print(f"          If a fixed intervention value is used, num_parallel_envs > 1 is acceptable.\n")
+            self.args.num_parallel_envs = 1 # Override for correctness
+        # --- End of critical check ---
+
         # Store current target entity
         self.current_target_entity_code = current_target_entity_code
         self.current_target_entity_name = ENTITY_CODE_DESCRIPTION.get(
@@ -339,6 +348,8 @@ class BatchedInterventionExperiment:
              self.envs.append(venv)
 
     def _reset_env_to_box_maze(self, env, channel_idx, trial_num):
+
+        create_box_maze 
         # Get initial state bytes from the current env to correctly initialize EnvState
         # This ensures EnvState has a valid underlying structure to modify.
         initial_state_bytes_for_setup = env.env.callmethod("get_state")[0]
@@ -491,9 +502,9 @@ class BatchedInterventionExperiment:
                 current_batch_intervention_values = []
                 for i in range(num_envs_this_batch):
                     overall_trial_idx_for_env_i = batch_start_trial_idx + i
-                    # Cycle through self.args.intervention_value list for the specific overall trial index
-                    iv_list = self.args.intervention_value
-                    current_batch_intervention_values.append(iv_list[overall_trial_idx_for_env_i % len(iv_list)])
+                    # CORRECTED: Use _get_intervention_value to get the float value for the trial
+                    intervention_val_for_trial = self._get_intervention_value(overall_trial_idx_for_env_i)
+                    current_batch_intervention_values.append(intervention_val_for_trial)
                 
                 # Get actions from model with intervention (Revised)
                 action_logits = None
@@ -503,10 +514,15 @@ class BatchedInterventionExperiment:
                     # 1. Define the intervention configuration for SAE
                     # Assuming SAEInterventionExperiment expects a config for its set_intervention method.
                     # The channel_idx in this loop is the SAE feature/dimension.
-                    value_for_this_model_step = current_batch_intervention_values[i]
+                    
+                    # CORRECTED: value_for_this_model_step should be defined. 
+                    # If the intervention hook applies one value to the whole batch, use the value for the first trial in this batch.
+                    # This has implications if num_parallel_envs > 1 and values are meant to vary per trial.
+                    applied_intervention_value_for_batch = current_batch_intervention_values[0] if num_envs_this_batch > 0 else self._get_intervention_value(0) # Fallback for safety
+
                     intervention_config_for_sae_step = [{
                         "sae_feature_idx": channel_idx, 
-                        "value": value_for_this_model_step,
+                        "value": applied_intervention_value_for_batch, # Use the corrected value
                         "intervention_type": self.args.intervention_type if hasattr(self.args, 'intervention_type') and self.args.intervention_type else "sae_activation_add",
                         # "layer_name": self.experiment.layer_name, # SAEInterventionExperiment should know its target layer_name
                         # "position": self.intervention_position, # If SAEInterventionExperiment supports spatial on its features
@@ -896,81 +912,7 @@ class BatchedInterventionExperiment:
         else:
             print(f"Warning: No data collected for detailed_results.csv. File will not be created.")
 
-    def _generate_visualization(self, all_results):
-        """Generate visualization of experiment results.
-        NOTE: This method is NO LONGER CALLED directly by run_experiments.
-        It's kept here as a reference or if needed for per-entity plotting,
-        but main plotting is handled by generate_experiment_visualizations in main().
-        """
-        # Create DataFrame for visualization
-        data = []
-        for result in all_results:
-            data.append({
-                'Channel': result['channel'],
-                'Successful Interventions': result['successful_interventions']
-            })
-        
-        df = pd.DataFrame(data)
-
-        # Create plot
-        plt.figure(figsize=(12, 6))
-        sns.barplot(data=df, x='Channel', y='Successful Interventions')
-        plt.title('Intervention Successful Interventions by Channel')
-        plt.xlabel('Channel Index')
-        plt.ylabel('Successful Interventions')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-
-        # Save plot
-        plt.savefig(os.path.join(self.output_dir, 'successful_interventions_by_channel.png'))
-        plt.close()
-
-    def _generate_entity_distribution_plot(self):
-        """Generate and save entity distribution plot.
-        NOTE: This method is NO LONGER CALLED directly by run_experiments.
-        It's kept here as a reference or if needed for per-entity plotting,
-        but main plotting is handled by generate_experiment_visualizations in main().
-        """
-        try:
-            # This would need to point to an entity-specific detailed CSV if used as is
-            detailed_csv_path = os.path.join(self.entity_specific_output_dir, 'detailed_results.csv') # Example path if saving per-entity
-            if not os.path.exists(detailed_csv_path) or os.path.getsize(detailed_csv_path) == 0:
-                print(f"Info: Detailed results CSV '{detailed_csv_path}' for entity {self.current_target_entity_name} is empty or not found. Skipping intervention value distribution plot.")
-                return
-
-            detailed_df = pd.read_csv(detailed_csv_path)
-            
-            if detailed_df.empty or 'success' not in detailed_df.columns or not detailed_df['success'].any():
-                print("Info: No successful interventions found in detailed results. Skipping intervention value distribution plot.")
-                return
-
-            successful_interventions_df = detailed_df[detailed_df['success']]
-            if successful_interventions_df.empty or 'intervention_value' not in successful_interventions_df.columns:
-                print("Info: No 'intervention_value' column found for successful interventions. Skipping plot.")
-                return
-
-            # Create figure
-            plt.figure(figsize=(12, 6))
-            
-            # Plot distribution of intervention values for successful interventions
-            sns.histplot(data=successful_interventions_df, 
-                        x='intervention_value', 
-                        bins=20,
-                        kde=True)
-            
-            plt.title('Distribution of Successful Intervention Values')
-            plt.xlabel('Intervention Value')
-            plt.ylabel('Count')
-            plt.grid(True, alpha=0.3)
-            
-            # Save plot
-            plt.savefig(os.path.join(self.entity_specific_output_dir, 'intervention_value_distribution.png'))
-            plt.close()
-            
-            print(f"Entity distribution plot for {self.current_target_entity_name} saved to: {os.path.join(self.entity_specific_output_dir, 'intervention_value_distribution.png')}")
-        except Exception as e:
-            print(f"Warning: Could not generate entity distribution plot: {e}")
-
+  
     def close_envs(self):
         """Close all environments."""
         print("Closing environments...")

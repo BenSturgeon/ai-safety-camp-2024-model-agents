@@ -15,7 +15,7 @@ For each checkpoint in the supplied directory that matches the pattern
     model_<step>.0.pt
 where <step> increases in 1000-step intervals (e.g. 1001, 2001, … 60001), we:
  1. Test all 4 bias directions to find the optimal one (lowest collection rate)
- 2. Launch `channel_ablation_sweep_bias_corrected.py` **sequentially** once per model
+ 2. Launch `parallel_ablation_sweep.py` **sequentially** once per model
     using the optimal bias direction.
 
 This follows the same checkpoint discovery pattern as run_base_model_serial_experiments.py
@@ -105,19 +105,32 @@ def test_bias_direction_optimization(model_path: str, output_dir: str, num_trial
             
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             
+            # Debug: print first few lines of output
+            if result.stdout:
+                print(f"[Bias Test]   Output preview: {result.stdout[:200]}...")
+            
             # Parse results from output
             gem_rate = 0.0
             timeout_rate = 1.0
             avg_reward = 0.0
             
-            lines = result.stdout.split('\\n')
+            lines = result.stdout.split('\n')
             for line in lines:
                 if "Gem collection rate:" in line:
-                    gem_rate = float(line.split(":")[1].strip().replace("%", "")) / 100
+                    try:
+                        gem_rate = float(line.split(":")[1].strip().replace("%", "")) / 100
+                    except (ValueError, IndexError) as e:
+                        print(f"[Bias Test]   Warning: Could not parse gem rate from line: {line}")
                 elif "Timeout rate:" in line:
-                    timeout_rate = float(line.split(":")[1].strip().replace("%", "")) / 100
+                    try:
+                        timeout_rate = float(line.split(":")[1].strip().replace("%", "")) / 100
+                    except (ValueError, IndexError) as e:
+                        print(f"[Bias Test]   Warning: Could not parse timeout rate from line: {line}")
                 elif "Average reward:" in line:
-                    avg_reward = float(line.split(":")[1].strip())
+                    try:
+                        avg_reward = float(line.split(":")[1].strip())
+                    except (ValueError, IndexError) as e:
+                        print(f"[Bias Test]   Warning: Could not parse avg reward from line: {line}")
             
             results.append({
                 'direction': direction,
@@ -150,18 +163,16 @@ def test_bias_direction_optimization(model_path: str, output_dir: str, num_trial
     return optimal['direction'], results
 
 def run_ablation_sweep(model_path: str, output_root: str, num_trials: int, bias_direction: str):
-    """Launch channel_ablation_sweep_bias_corrected.py for the given model with optimal bias direction."""
+    """Launch parallel_ablation_sweep.py for the given model with optimal bias direction."""
     
     cmd = [
-        PYTHON, "channel_ablation_sweep_bias_corrected.py",
+        PYTHON, "parallel_ablation_sweep.py",
         "--model_path", model_path,
         "--layer_spec", LAYER_SPEC,
         "--num_trials", str(num_trials),
         "--max_steps", str(MAX_STEPS_PER_TRIAL),
         "--output_dir", output_root,
-        "--total_channels_for_base_layer", str(TOTAL_CHANNELS_CONV4A),
-        "--start_channel", "0",
-        "--end_channel", str(TOTAL_CHANNELS_CONV4A),
+        "--total_channels", str(TOTAL_CHANNELS_CONV4A),
         "--bias_direction", bias_direction,
         "--maze_type", MAZE_TYPE,
         "--no_save_gifs"

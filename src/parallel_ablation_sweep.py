@@ -32,6 +32,8 @@ def parse_args():
     parser.add_argument("--num_processes", type=int, default=min(16, cpu_count()), help="Number of parallel processes to launch.")
     parser.add_argument("--total_channels", type=int, required=True, help="Total number of channels in the target layer (SAE or Base). Required for parallel chunking.") # Required now
     parser.add_argument("--worker_script", type=str, default="channel_ablation_sweep.py", help="Path to the worker script.")
+    parser.add_argument("--maze_type", type=str, default="fork", choices=["fork", "corners"], help="Type of maze to use for the experiment.")
+    parser.add_argument("--bias_direction", type=str, default=None, choices=["up", "down", "left", "right"], help="Bias direction for maze orientation (optional).")
 
 
     args = parser.parse_args()
@@ -59,7 +61,7 @@ def parse_args():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_type = "sae" if args.is_sae_run else "base"
     safe_layer_spec = args.layer_spec.replace('.', '_')
-    dir_name_parts = [f"run_{run_type}_{safe_layer_spec}"]
+    dir_name_parts = [f"run_{args.maze_type}_{run_type}_{safe_layer_spec}"]
     if args.is_sae_run:
         safe_sae_name = os.path.basename(args.sae_checkpoint_path).replace('.pt', '')
         dir_name_parts.append(safe_sae_name) # Add SAE name for clarity
@@ -101,7 +103,12 @@ def run_worker(worker_args):
         "--output_dir", common_args.output_dir,
         "--start_channel", str(start_channel),
         "--end_channel", str(end_channel),
+        "--maze_type", common_args.maze_type,
     ]
+    
+    # Add bias_direction if provided
+    if common_args.bias_direction:
+        command.extend(["--bias_direction", common_args.bias_direction])
 
     # Conditionally add SAE path or total_channels_for_base_layer
     if common_args.is_sae_run:
@@ -185,7 +192,7 @@ def main():
     if os.path.exists(plot_script_path):
         print(f"\nAttempting to generate plots using {plot_script_path}...")
         # Simplified title prefix
-        plot_title_prefix = f"{args.run_type}_{args.layer_spec}"
+        plot_title_prefix = f"{args.run_type}_{args.layer_spec}_{args.maze_type}"
         plot_command = [
             "python",
             plot_script_path,

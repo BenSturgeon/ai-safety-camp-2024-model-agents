@@ -28,13 +28,13 @@ def create_bias_corrected_fork_maze(bias_direction="up"):
         # Stem points up, entities at bottom of fork
         # Fix coordinate system: in the environment, lower Y coordinates are at the top
         pattern = np.array([
-            [0, 0, 0, 2, 0, 0, 0],  # Player at stem end (top)
-            [0, 0, 0, 1, 0, 0, 0],  # Stem
-            [0, 0, 0, 1, 0, 0, 0],  # Stem
-            [0, 0, 0, 1, 0, 0, 0],  # Stem
-            [1, 1, 1, 1, 1, 1, 1],  # Fork junction
-            [1, 0, 1, 0, 1, 0, 1],  # Fork ends
-            [3, 0, 4, 0, 5, 0, 6]   # Entities at fork ends (bottom)
+            [0, 0, 0, 2, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 1, 0, 1, 0, 1],
+            [3, 0, 4, 0, 5, 0, 6]
         ])
     
     elif bias_direction == "down":
