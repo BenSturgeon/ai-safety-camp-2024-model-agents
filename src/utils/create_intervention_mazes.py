@@ -583,6 +583,47 @@ def create_box_maze(entity1=4, entity2=None):
     return create_custom_maze_sequence([final_pattern])
 
 
+def create_empty_corners_maze(randomize_entities=True):
+    """
+    Creates an empty maze with gem and 3 keys in the corners.
+    Player starts in the center. Can randomly swap entity positions.
+    
+    Args:
+        randomize_entities: Whether to randomly shuffle entity positions (default: True)
+    
+    Returns:
+        tuple: (observations, venv) - List of observations and final environment
+    """
+    # Base pattern: empty maze with entities in corners
+    # 0 = wall, 1 = corridor, 2 = player
+    # 3 = gem, 4 = blue key, 5 = green key, 6 = red key
+    pattern = np.array([
+        [3, 1, 1, 1, 1, 1, 4],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 2, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1],
+        [5, 1, 1, 1, 1, 1, 6]
+    ])
+    
+    if randomize_entities:
+        # Randomly shuffle entity positions in corners
+        corner_positions = [(0, 0), (0, 6), (6, 0), (6, 6)]
+        entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
+        random.shuffle(entity_values)
+        
+        # Clear corners first
+        for pos in corner_positions:
+            pattern[pos[0], pos[1]] = 1
+        
+        # Place shuffled entities
+        for pos, entity in zip(corner_positions, entity_values):
+            pattern[pos[0], pos[1]] = entity
+    
+    return create_custom_maze_sequence([pattern])
+
+
 def create_trident_maze():
     """
     Creates an example sequence of maze environments to demonstrate the custom maze functionality.
