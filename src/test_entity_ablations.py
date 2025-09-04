@@ -730,7 +730,10 @@ def run_ablation_experiment(run_dir: str, num_trials: int = 100,
             "inverse_mode": inverse,
             "disjoint_only": disjoint_only,
             "buffer_multiplier": buffer_multiplier,
-            "mode_description": mode_desc
+            "mode_description": mode_desc,
+            "probe_path": probe_path,
+            "probe_enabled": probe is not None,
+            "probe_label_map": probe_label_map
         },
         "aggregate_statistics": aggregate_stats,
         "detailed_results": results
@@ -757,6 +760,8 @@ def main():
                        help="If set, use only non-overlapping spans (requires --inverse)")
     parser.add_argument("--buffer", type=float, default=1.0,
                        help="Buffer multiplier for activation ranges (1.0 = no buffer, 1.25 = 25% buffer)")
+    parser.add_argument("--probe_path", type=str, default=None,
+                       help="Path to trained probe for next target prediction analysis (optional)")
     
     args = parser.parse_args()
     
@@ -772,7 +777,8 @@ def main():
         args.device,
         args.inverse,
         args.disjoint,
-        args.buffer
+        args.buffer,
+        args.probe_path
     )
     
     # Save results as JSON
