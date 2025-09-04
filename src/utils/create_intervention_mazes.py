@@ -138,6 +138,7 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
     )
     state = heist.state_from_venv(venv, 0)
     
+    
     # ---- START DEBUG BLOCK ----
     # Check for key presence immediately after venv creation with the selected seed
     key_types_to_check = {
@@ -285,32 +286,14 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
         # ------------------------------------------------------------------
         # Control HUD key visibility based on progressive key collection logic
         # ------------------------------------------------------------------
-        # In Heist, keys must be collected in order: blue -> green -> red
-        # If a red lock is present, agent needs blue+green+red keys to open it
-        # If a green lock is present, agent needs blue+green keys to open it
-        # If a blue lock is present, agent needs blue key to open it
+        # HUD should only show keys that have been collected (removed from maze)
+        # Since we're creating a custom maze, we don't have collection history
+        # So by default, no keys should be shown in HUD unless explicitly needed
         hud_keys_needed = set()
         
-        # Determine which HUD keys should be visible based on locks present
-        if "red" in lock_colors_present:
-            # Red lock requires all three keys collected in sequence
-            hud_keys_needed.update(["blue", "green", "red"])
-        elif "green" in lock_colors_present:
-            # Green lock requires blue and green keys
-            hud_keys_needed.update(["blue", "green"])
-        elif "blue" in lock_colors_present:
-            # Blue lock requires only blue key
-            hud_keys_needed.add("blue")
-        
-        # Also show HUD keys for any keys that are explicitly present in the maze
-        # (even if there's no corresponding lock)
-        hud_keys_needed.update(keys_colors_present)
-
-        # Suppress HUD keys for colours that have a key but no lock.
-        # During key-only runs (e.g. blue_key, green_key, red_key targets),
-        # we don’t want the HUD to reveal the key icon.
-        keys_without_locks = keys_colors_present - lock_colors_present
-        hud_keys_needed -= keys_without_locks
+        # Don't show any HUD keys by default for custom mazes
+        # Keys should only appear in HUD after they've been collected
+        # Since all keys are still present in the maze, HUD should be empty
 
         # Store HUD key settings for later application when the state is finalized
         hud_key_settings = None
@@ -331,7 +314,7 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
         if state_bytes is not None:
             venv.env.callmethod("set_state", [state_bytes])
         
-        # Remove all existing entities
+        # Remove all entities (now preserves HUD keys automatically)
         state.remove_all_entities()
         
         # Update the environment state after removing entities
@@ -557,7 +540,7 @@ def create_box_maze(entity1=4, entity2=None):
     pattern = np.array([
             [0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 1, 1, 1, 0],
-            [0, 3, 0, 0, 0, 4, 0],
+            [0, 3, 0, 0, 0, 1, 0],
             [0, 1, 0, 0, 0, 1, 0],
             [0, 1, 1, 1, 1, 1, 0],
             [0, 0, 0, 1, 0, 0, 0],
@@ -623,6 +606,46 @@ def create_empty_corners_maze(randomize_entities=True):
     
     return create_custom_maze_sequence([pattern])
 
+
+def create_empty_corners_maze_with_red_lock(randomize_entities=True):
+    """
+    Creates an empty maze with gem and 3 keys in the corners, plus a red lock.
+    Player starts in the center. Red lock is placed on the right side.
+    
+    Args:
+        randomize_entities: Whether to randomly shuffle entity positions (default: True)
+    
+    Returns:
+        tuple: (observations, venv) - List of observations and final environment
+    """
+    # Base pattern: empty maze with entities in corners and red lock
+    # 0 = wall, 1 = corridor, 2 = player
+    # 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 9 = red lock
+    pattern = np.array([
+        [3, 1, 1, 1, 1, 1, 4],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 2, 1, 1, 9],
+        [1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1],
+        [5, 1, 1, 1, 1, 1, 6]
+    ])
+    
+    if randomize_entities:
+        # Randomly shuffle entity positions in corners (not the red lock)
+        corner_positions = [(0, 0), (0, 6), (6, 0), (6, 6)]
+        entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
+        random.shuffle(entity_values)
+        
+        # Clear corners first
+        for pos in corner_positions:
+            pattern[pos[0], pos[1]] = 1
+        
+        # Place shuffled entities
+        for pos, entity in zip(corner_positions, entity_values):
+            pattern[pos[0], pos[1]] = entity
+    
+    return create_custom_maze_sequence([pattern])
 
 def create_trident_maze():
     """

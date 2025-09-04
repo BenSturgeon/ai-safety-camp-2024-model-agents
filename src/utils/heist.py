@@ -526,8 +526,37 @@ class EnvState:
     def remove_all_entities(self):
         state_values = self.state_vals
         for ents in state_values["ents"]:
-            ents["x"].val = -1
-            ents["y"].val = -1
+            # Check if this is a HUD key (type 2 or 11 at HUD position)
+            # Type 2 = KEY, Type 11 = KEY_ON_RING
+            # Natural mazes use Type 2 keys at HUD positions (y~0.022)
+            is_hud_key = ((ents["image_type"].val == 2 or ents["image_type"].val == 11) and 
+                         ents["y"].val < 0.5 and 
+                         ents["y"].val > 0)
+            
+            # Only remove if it's NOT a HUD key
+            if not is_hud_key:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        
+        self.state_bytes = _serialize_maze_state(state_values)
+    
+    def remove_maze_entities_preserve_hud(self):
+        """
+        Removes all maze entities but preserves HUD keys (type 11 at y < 0.5).
+        This is crucial for maintaining HUD state when creating custom mazes.
+        """
+        state_values = self.state_vals
+        for ents in state_values["ents"]:
+            # Check if this is a HUD key (type 11 at HUD position)
+            is_hud_key = (ents["image_type"].val == 11 and 
+                         ents["y"].val < 0.5 and 
+                         ents["y"].val > 0)
+            
+            # Only remove if it's NOT a HUD key
+            if not is_hud_key:
+                ents["x"].val = -1
+                ents["y"].val = -1
+        
         self.state_bytes = _serialize_maze_state(state_values)
     
     def clear_entities(self):
@@ -657,13 +686,28 @@ class EnvState:
                     ents["y"].val = -1
         self.state_bytes = _serialize_maze_state(state_values)
 
-    def set_entity_position(self, entity_type, entity_theme, x, y):
+    def set_entity_position(self, entity_type, entity_theme, x, y, skip_hud=True):
+        """
+        Set entity position. By default skips HUD keys to preserve them.
+        
+        Args:
+            entity_type: Type of entity (e.g., 2 for KEY)
+            entity_theme: Theme/color of entity (e.g., 0 for blue)
+            x: X position to set
+            y: Y position to set  
+            skip_hud: If True, skip entities at HUD positions (y < 0.5)
+        """
         state_values = self.state_vals
         for ents in state_values["ents"]:
             if ents["image_type"].val == entity_type:
                 if entity_theme is None or ents["image_theme"].val == entity_theme:
+                    # Skip HUD entities if requested (default behavior)
+                    if skip_hud and ents["y"].val < 0.5 and ents["y"].val > 0:
+                        continue  # Skip this entity, it's in the HUD
+                    
                     ents["x"].val = float(y) + .5
                     ents["y"].val = float(x) + .5
+                    break  # Only move the first matching non-HUD entity
         self.state_bytes = _serialize_maze_state(state_values)
 
     def move_entity_offscreen(self, entity_type, entity_theme=None):
