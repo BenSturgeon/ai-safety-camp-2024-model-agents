@@ -362,8 +362,8 @@ def create_custom_maze_sequence(maze_patterns, maze_size=7):
             state.set_entity_position(
                 ENTITY_TYPES[entity_type], 
                 ENTITY_COLORS[entity_color] if entity_color else None,
-                y, 
-                x + start_x
+                x + start_x,
+                y
             )
             
             # Update the environment state after each entity placement
@@ -591,57 +591,19 @@ def create_empty_corners_maze(randomize_entities=True):
     ])
     
     if randomize_entities:
-        # Randomly shuffle entity positions in corners
+        # Randomly shuffle entity positions at the corners
+        # Note: row 0 in pattern becomes bottom after y-coord conversion
+        # So (0,0) in pattern = bottom-left, (6,6) in pattern = top-right
         corner_positions = [(0, 0), (0, 6), (6, 0), (6, 6)]
         entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
         random.shuffle(entity_values)
         
-        # Clear corners first
-        for pos in corner_positions:
+        # Clear corners first (including original corner positions)
+        original_corners = [(0, 0), (0, 6), (6, 0), (6, 6)]
+        for pos in original_corners:
             pattern[pos[0], pos[1]] = 1
         
-        # Place shuffled entities
-        for pos, entity in zip(corner_positions, entity_values):
-            pattern[pos[0], pos[1]] = entity
-    
-    return create_custom_maze_sequence([pattern])
-
-
-def create_empty_corners_maze_with_red_lock(randomize_entities=True):
-    """
-    Creates an empty maze with gem and 3 keys in the corners, plus a red lock.
-    Player starts in the center. Red lock is placed on the right side.
-    
-    Args:
-        randomize_entities: Whether to randomly shuffle entity positions (default: True)
-    
-    Returns:
-        tuple: (observations, venv) - List of observations and final environment
-    """
-    # Base pattern: empty maze with entities in corners and red lock
-    # 0 = wall, 1 = corridor, 2 = player
-    # 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 9 = red lock
-    pattern = np.array([
-        [3, 1, 1, 1, 1, 1, 4],
-        [1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 2, 1, 1, 9],
-        [1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1, 1, 1],
-        [5, 1, 1, 1, 1, 1, 6]
-    ])
-    
-    if randomize_entities:
-        # Randomly shuffle entity positions in corners (not the red lock)
-        corner_positions = [(0, 0), (0, 6), (6, 0), (6, 6)]
-        entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
-        random.shuffle(entity_values)
-        
-        # Clear corners first
-        for pos in corner_positions:
-            pattern[pos[0], pos[1]] = 1
-        
-        # Place shuffled entities
+        # Place shuffled entities at safer positions
         for pos, entity in zip(corner_positions, entity_values):
             pattern[pos[0], pos[1]] = entity
     

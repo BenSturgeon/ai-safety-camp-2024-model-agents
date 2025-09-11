@@ -93,6 +93,7 @@ def run_rollout_and_collect_data(model, num_steps=100, collect_every=1, seed=Non
     
     Returns:
         observations: List of observations
+        activations: Dict of layer activations for each observation
         labels: List of labels (what the next target should be)
         metadata: Additional information about each sample
     """
@@ -108,11 +109,15 @@ def run_rollout_and_collect_data(model, num_steps=100, collect_every=1, seed=Non
     state = heist.state_from_venv(venv, 0)
     
     observations = []
+    all_activations = {layer: [] for layer in ['conv1a', 'conv2a', 'conv2b', 'conv3a', 'conv4a', 'fc1', 'fc2', 'fc3']}
     labels = []
     metadata = []
     
     # Track collected keys
     collected_keys = set()
+    
+    # Hook storage for activations
+    hook_dict = {}
     
     # Label mapping
     label_map = {
@@ -140,6 +145,14 @@ def run_rollout_and_collect_data(model, num_steps=100, collect_every=1, seed=Non
         if step % collect_every == 0:
             observations.append(obs[0])
             labels.append(label_map[next_target])
+            
+            # Store activations for this sample
+            for layer_name in all_activations.keys():
+                for hook_name, hook_data in hook_dict.items():
+                    if layer_name in hook_name and 'output' in hook_data:
+                        all_activations[layer_name].append(hook_data['output'].numpy())
+                        break  # Found the layer, move to next
+            
             metadata.append({
                 'step': step,
                 'collected_keys': list(collected_keys),
@@ -148,8 +161,25 @@ def run_rollout_and_collect_data(model, num_steps=100, collect_every=1, seed=Non
                 'player_pos': current_entities.get('player', (-1, -1))
             })
         
-        # Get action from model using the helper function
-        action = generate_action(model, obs[0], is_procgen_env=True)
+        # Get action from model and extract activations
+        with torch.no_grad():
+            obs_tensor = torch.from_numpy(obs).float()
+            
+            # Register hooks to capture activations (only on first step)
+            if step == 0:
+                for name, module in model.named_modules():
+                    for layer in all_activations.keys():
+                        if layer == name or name.endswith('.' + layer):
+                            hook_dict[name] = {}
+                            def make_hook(layer_name):
+                                def hook(module, input, output):
+                                    hook_dict[layer_name]['output'] = output.detach().cpu()
+                                return hook
+                            module.register_forward_hook(make_hook(name))
+            
+            # Forward pass
+            dist, value = model(obs_tensor)
+            action = dist.sample().cpu().numpy()
         
         # Take action
         obs, reward, done, info = venv.step(action)
@@ -182,7 +212,7 @@ def run_rollout_and_collect_data(model, num_steps=100, collect_every=1, seed=Non
     
     venv.close()
     
-    return observations, labels, metadata, label_map
+    return observations, all_activations, labels, metadata, label_map
 
 
 def collect_dataset(model, num_rollouts=100, num_steps_per_rollout=100, 
@@ -207,6 +237,7 @@ def collect_dataset(model, num_rollouts=100, num_steps_per_rollout=100,
         logger = logging.getLogger(__name__)
     
     all_observations = []
+    all_activations = {layer: [] for layer in ['conv1a', 'conv2a', 'conv2b', 'conv3a', 'conv4a', 'fc1', 'fc2', 'fc3']}
     all_labels = []
     all_metadata = []
     label_map = None
@@ -218,7 +249,7 @@ def collect_dataset(model, num_rollouts=100, num_steps_per_rollout=100,
     for rollout_idx in tqdm(range(num_rollouts), desc="Rollouts"):
         seed = random.randint(0, 100000)
         
-        observations, labels, metadata, label_map = run_rollout_and_collect_data(
+        observations, activations, labels, metadata, label_map = run_rollout_and_collect_data(
             model, 
             num_steps=num_steps_per_rollout,
             collect_every=collect_every,
@@ -233,6 +264,11 @@ def collect_dataset(model, num_rollouts=100, num_steps_per_rollout=100,
         all_observations.extend(observations)
         all_labels.extend(labels)
         all_metadata.extend(metadata)
+        
+        # Extend activations for each layer
+        for layer in all_activations.keys():
+            if layer in activations:
+                all_activations[layer].extend(activations[layer])
     
     # Convert to numpy arrays
     all_observations = np.array(all_observations)
@@ -255,7 +291,12 @@ def collect_dataset(model, num_rollouts=100, num_steps_per_rollout=100,
     logger.info(f"  Samples with green key collected: {total_green_collected}")
     logger.info(f"  Samples with red key collected: {total_red_collected}")
     
-    return all_observations, all_labels, label_map, all_metadata
+    # Convert activations to numpy arrays
+    for layer in all_activations.keys():
+        if all_activations[layer]:
+            all_activations[layer] = np.array(all_activations[layer])
+    
+    return all_observations, all_activations, all_labels, label_map, all_metadata
 
 
 def main():
@@ -305,7 +346,7 @@ def main():
     model.eval()
     
     # Collect dataset
-    observations, labels, label_map, metadata = collect_dataset(
+    observations, activations, labels, label_map, metadata = collect_dataset(
         model,
         num_rollouts=args.num_rollouts,
         num_steps_per_rollout=args.steps_per_rollout,
@@ -323,6 +364,7 @@ def main():
     with open(dataset_path, 'wb') as f:
         pickle.dump({
             'observations': observations,
+            'activations': activations,  # Now includes all layer activations
             'labels': labels,
             'label_map': label_map,
             'metadata': metadata,
