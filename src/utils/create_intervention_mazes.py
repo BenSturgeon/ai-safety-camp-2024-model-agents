@@ -639,13 +639,13 @@ def create_trident_maze():
 def create_cross_maze():
     """
     Creates an example sequence of maze environments to demonstrate the custom maze functionality.
-    
+
     This example creates a sequence showing an entity moving around the maze in a predefined path.
-    
+
     Args:
         entity1 (int): Code for the main entity to track (default: 4, blue key)
         entity2 (int): Code for a secondary static entity, or None to not include (default: None)
-    
+
     Returns:
         tuple: (observations, venv) - List of observations and final environment
     """
@@ -654,32 +654,63 @@ def create_cross_maze():
     # Values: 3 = gem, 4 = blue key, 5 = green key, 6 = red key, 7 = blue lock, 8 = green lock, 9 = red lock
     pattern = np.array([
             [0, 0, 0, 5, 0, 0, 0],
+            [0, 0, 0, 7, 0, 0, 0],
             [0, 0, 0, 1, 0, 0, 0],
+            [4, 1, 1, 2, 1, 9, 3],
             [0, 0, 0, 1, 0, 0, 0],
-            [4, 1, 1, 2, 1, 1, 3],
-            [0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 8, 0, 0, 0],
             [0, 0, 0, 6, 0, 0, 0]])
 
 
-    # Randomize the positions of the entities (values 3, 4, 5, 6)
-    entity_values = [3, 4, 5, 6]  # gem, blue key, green key, red key
-    random.shuffle(entity_values)
-    
-    # Create a mapping from original values to shuffled values
-    entity_mapping = {
-        3: entity_values[0],
-        4: entity_values[1],
-        5: entity_values[2],
-        6: entity_values[3]
+    # Define the key-lock pairs (key: lock that blocks access to it)
+    # Blue key (4) has no lock blocking it
+    # Green key (5) has blue lock (7) blocking access to it
+    # Red key (6) has green lock (8) blocking access to it
+    # Gem (3) has red lock (9) blocking access to it
+
+    # Create dictionary mapping keys to their blocking locks
+    key_to_lock = {
+        4: None,  # blue key, no lock
+        5: 7,     # green key, blocked by blue lock
+        6: 8,     # red key, blocked by green lock
+        3: 9      # gem, blocked by red lock
     }
-    
-    # Apply the mapping to the pattern
-    for i in range(pattern.shape[0]):
-        for j in range(pattern.shape[1]):
-            if pattern[i, j] in entity_mapping:
-                pattern[i, j] = entity_mapping[pattern[i, j]]
-    
+
+    # Define the 4 corridors of the cross (left, top, right, bottom)
+    # Each corridor has a key position at the end and a lock position closer to center
+    corridors = [
+        {'name': 'left', 'key_pos': (3, 0), 'lock_pos': (3, 1)},
+        {'name': 'top', 'key_pos': (0, 3), 'lock_pos': (1, 3)},
+        {'name': 'right', 'key_pos': (3, 6), 'lock_pos': (3, 5)},
+        {'name': 'bottom', 'key_pos': (6, 3), 'lock_pos': (5, 3)}
+    ]
+
+    # Create list of keys to place
+    keys = [4, 5, 6, 3]  # blue key, green key, red key, gem
+
+    # Shuffle the keys to randomize their placement
+    random.shuffle(keys)
+
+    # Clear all original entity/lock positions in the pattern
+    for corridor in corridors:
+        r, c = corridor['key_pos']
+        pattern[r, c] = 1  # Clear key position
+        r, c = corridor['lock_pos']
+        pattern[r, c] = 1  # Clear lock position
+
+    # Place each key in a corridor with its corresponding lock
+    for corridor, key_val in zip(corridors, keys):
+        # Place the key at the end of the corridor
+        r, c = corridor['key_pos']
+        pattern[r, c] = key_val
+
+        # Place the corresponding lock that blocks this key
+        lock_val = key_to_lock[key_val]
+        if lock_val is not None:
+            r_lock, c_lock = corridor['lock_pos']
+            pattern[r_lock, c_lock] = lock_val
+        # If lock_val is None (blue key), leave the lock position as corridor (1)
+
     return create_custom_maze_sequence([pattern])
 
 
