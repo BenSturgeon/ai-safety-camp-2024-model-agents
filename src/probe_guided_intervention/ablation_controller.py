@@ -17,12 +17,19 @@ from src.utils.create_intervention_mazes import create_cross_maze
 from .probe_loaders import (
     load_conv3a_probe,
     load_conv4a_probe,
-    load_fc1_binary_probes
+    load_fc1_binary_probes,
+    load_fc2_binary_probes,
+    load_fc3_binary_probes
 )
 from .ablation_optimizers import (
-    find_optimal_ablations_random,
-    find_optimal_ablations_for_conv4a,
-    find_optimal_ablations_for_fc1
+    unified_layer_optimization,
+    find_optimal_ablations_random,  # Keep for backwards compatibility
+    find_optimal_ablations_for_conv4a,  # Keep for backwards compatibility
+    find_optimal_ablations_for_fc1,  # Keep for backwards compatibility
+    find_optimal_ablations_all_layers,
+    find_optimal_ablations_for_fc3_probes,
+    find_optimal_ablations_for_fc2_to_fc3,
+    find_optimal_ablations_for_fc3_direct
 )
 from .rollout_experiments import (
     test_green_key_first,
@@ -38,7 +45,8 @@ class AblationController:
                  model_path='base_models/full_run/model_35001.0.pt',
                  probe_path='src/probe_training/trained_probes_20250904_080738/conv3a_probe.pt',
                  conv4a_probe_path='src/probe_training/trained_probes_20250904_080738/conv4a_probe.pt',
-                 fc1_probe_dir='src/probe_training/binary_probes_20250925_183257/'):
+                 fc1_probe_dir='src/probe_training/binary_probes_20250925_183257/',
+                 fc2_probe_dir='src/probe_training/binary_probes_20250925_183257/'):
         """
         Initialize the ablation controller with model and probes.
 
@@ -61,8 +69,18 @@ class AblationController:
         # Load fc1 binary probes
         self.fc1_probes = load_fc1_binary_probes(fc1_probe_dir)
 
+        # Load fc2 binary probes
+        self.fc2_probes = load_fc2_binary_probes(fc2_probe_dir)
+
+        # Load fc3 binary probes (policy layer)
+        self.fc3_probes = load_fc3_binary_probes()
+
         # Ablation tracking
-        self.ablation_mask = None
+        self.ablation_mask = None  # For conv3a
+        self.conv4a_ablation_mask = None  # For conv4a
+        self.fc2_ablation_mask = None  # For fc2
+        self.fc3_ablation_mask = None  # For fc3
+        self.ablation_layer = 'conv3a'  # Which layer to ablate
         self.total_neurons = 0
         self.ablated_count = 0
 
@@ -71,33 +89,47 @@ class AblationController:
         print(f"  - Conv3a probe: {probe_path}")
         print(f"  - Conv4a probe: {conv4a_probe_path}")
         print(f"  - FC1 probes: {len(self.fc1_probes)} entities loaded")
+        print(f"  - FC2 probes: {len(self.fc2_probes)} entities loaded")
+        print(f"  - FC3 probes: {len(self.fc3_probes)} entities loaded")
 
     def get_conv_layers_with_hook(self, obs, requires_grad=False):
         """
-        Get conv3a, conv4a, and fc1 activations and apply ablation mask to conv3a.
+        Get conv3a, conv4a, fc1, and fc2 activations and apply ablation mask to conv3a.
 
         Args:
             obs: Observation tensor
             requires_grad: Whether to compute gradients
 
         Returns:
-            tuple: (model_output, conv3a, conv4a, fc1)
+            tuple: (model_output, conv3a, conv4a, fc1, fc2)
         """
         activations = {}
 
         def hook(name):
             def fn(module, input, output):
-                # Apply ablation mask only to conv3a
-                if name == 'conv3a' and self.ablation_mask is not None:
+                # Apply ablation masks based on which layer we're ablating
+                if name == 'conv3a' and self.ablation_mask is not None and self.ablation_layer == 'conv3a':
                     output = output * self.ablation_mask.unsqueeze(0)
+                elif name == 'conv4a' and self.conv4a_ablation_mask is not None and self.ablation_layer == 'conv4a':
+                    output = output * self.conv4a_ablation_mask.unsqueeze(0)
+                elif name == 'fc2' and self.fc2_ablation_mask is not None and self.ablation_layer == 'fc2':
+                    output = output * self.fc2_ablation_mask.unsqueeze(0)
+                elif name == 'fc3' and self.fc3_ablation_mask is not None and self.ablation_layer == 'fc3':
+                    output = output * self.fc3_ablation_mask.unsqueeze(0)
                 # Clone and detach to make it a leaf tensor if we need gradients
                 if requires_grad and name == 'conv3a':
                     output = output.clone().detach().requires_grad_(True)
                 activations[name] = output
-                return output if name == 'conv3a' else None  # Only modify conv3a
+                # Return modified output for ablated layers
+                if (name == 'conv3a' and self.ablation_layer == 'conv3a') or \
+                   (name == 'conv4a' and self.ablation_layer == 'conv4a') or \
+                   (name == 'fc2' and self.ablation_layer == 'fc2') or \
+                   (name == 'fc3' and self.ablation_layer == 'fc3'):
+                    return output
+                return None
             return fn
 
-        # Register hooks for conv3a, conv4a, and fc1
+        # Register hooks for conv3a, conv4a, fc1, and fc2
         handles = []
         for name, module in self.model.named_modules():
             if 'conv3a' in name and isinstance(module, nn.Conv2d):
@@ -109,6 +141,12 @@ class AblationController:
             elif name == 'fc1' and isinstance(module, nn.Linear):
                 handle = module.register_forward_hook(hook('fc1'))
                 handles.append(handle)
+            elif name == 'fc2' and isinstance(module, nn.Linear):
+                handle = module.register_forward_hook(hook('fc2'))
+                handles.append(handle)
+            elif name == 'fc3' and isinstance(module, nn.Linear):
+                handle = module.register_forward_hook(hook('fc3'))
+                handles.append(handle)
 
         # Forward pass
         output = self.model(obs)
@@ -117,12 +155,34 @@ class AblationController:
         for handle in handles:
             handle.remove()
 
-        return output, activations.get('conv3a'), activations.get('conv4a'), activations.get('fc1')
+        return output, activations.get('conv3a'), activations.get('conv4a'), activations.get('fc1'), activations.get('fc2'), activations.get('fc3')
 
     def get_conv3a_with_hook(self, obs, requires_grad=False):
         """Backward compatibility wrapper for conv3a only."""
-        output, conv3a, _, _ = self.get_conv_layers_with_hook(obs, requires_grad)
+        output, conv3a, _, _, _, _ = self.get_conv_layers_with_hook(obs, requires_grad)
         return output, conv3a
+
+    def get_conv3a_fc3_hook(self, obs):
+        """Get conv3a and fc3 for direct action control."""
+        output, conv3a, _, _, _, fc3 = self.get_conv_layers_with_hook(obs)
+        return output, conv3a, fc3
+
+    def optimize_layer(self, obs, target_entity, layer_name='fc1', max_trials=1000, allow_amplification=True, verbose=True):
+        """
+        Unified method to optimize any layer for target entity.
+
+        Args:
+            obs: Observation tensor
+            target_entity: Target entity to optimize for
+            layer_name: Which layer ('conv3a', 'conv4a', 'fc1', 'fc2', 'fc3')
+            max_trials: Number of optimization trials
+            allow_amplification: Whether to allow values [0, 2] vs just [0, 1]
+            verbose: Whether to print progress
+
+        Returns:
+            best_mask: Optimized mask
+        """
+        return unified_layer_optimization(self, obs, target_entity, layer_name, max_trials, allow_amplification, verbose)
 
     def find_optimal_ablations_random(self, obs, target_entity, max_trials=30):
         """Find optimal ablations using random search."""
@@ -157,6 +217,57 @@ class AblationController:
         return find_optimal_ablations_for_fc1(
             self.ablation_mask, obs, self.fc1_probes,
             get_conv_layers_hook_fn, target_entity, max_trials
+        )
+
+    def find_optimal_ablations_all_layers(self, obs, target_entity='green_key', max_trials=2000):
+        """Find conv3a ablations that optimize all layers simultaneously."""
+        # Wrapper that provides the necessary context
+        def get_all_layers_hook_fn(obs_tensor):
+            return self.get_conv_layers_with_hook(obs_tensor)
+
+        return find_optimal_ablations_all_layers(
+            self.ablation_mask, obs, get_all_layers_hook_fn,
+            self.conv4a_probe, self.fc1_probes, self.fc2_probes,
+            self.label_map, target_entity, max_trials
+        )
+
+    def find_optimal_ablations_for_fc3(self, obs, target_entity='green_key', max_trials=500):
+        """Find conv3a ablations that optimize FC3 (policy layer) predictions."""
+        # Wrapper that provides the necessary context
+        def get_conv_layers_hook_fn(obs_tensor):
+            return self.get_conv_layers_with_hook(obs_tensor)
+
+        return find_optimal_ablations_for_fc3_probes(
+            self.ablation_mask, obs, self.fc3_probes,
+            get_conv_layers_hook_fn, target_entity, max_trials
+        )
+
+    def find_optimal_fc2_for_fc3(self, obs, target_entity='green_key', max_trials=2000, continuous=True):
+        """Find FC2 ablations that optimize FC3 (policy layer) predictions."""
+        # Get FC2 dimensions
+        with torch.no_grad():
+            _, _, _, _, fc2, _ = self.get_conv_layers_with_hook(obs)
+            if fc2 is None:
+                print("ERROR: Could not get FC2 layer")
+                return None
+            fc2_shape = fc2[0].shape
+
+        return find_optimal_ablations_for_fc2_to_fc3(
+            fc2_shape, obs, self.fc3_probes, self, target_entity, max_trials, continuous
+        )
+
+    def find_optimal_fc3_direct(self, obs, target_entity='green_key', max_trials=2000, allow_amplification=True):
+        """Directly modulate FC3 neurons to optimize FC3 probe predictions and policy output."""
+        # Get FC3 dimensions
+        with torch.no_grad():
+            _, _, _, _, _, fc3 = self.get_conv_layers_with_hook(obs)
+            if fc3 is None:
+                print("ERROR: Could not get FC3 layer")
+                return None
+            fc3_shape = fc3[0].shape
+
+        return find_optimal_ablations_for_fc3_direct(
+            fc3_shape, obs, self.fc3_probes, self, target_entity, max_trials, allow_amplification
         )
 
     # Experiment methods
@@ -204,7 +315,7 @@ class AblationController:
 
         # Initialize ablation mask
         with torch.no_grad():
-            _, conv3a, conv4a, fc1 = self.get_conv_layers_with_hook(obs_tensor)
+            _, conv3a, conv4a, fc1, _ = self.get_conv_layers_with_hook(obs_tensor)
             if conv3a is not None:
                 self.ablation_mask = torch.ones_like(conv3a[0])
                 self.total_neurons = self.ablation_mask.numel()
@@ -216,7 +327,7 @@ class AblationController:
 
             # Check results
             with torch.no_grad():
-                _, conv3a, _, _ = self.get_conv_layers_with_hook(obs_tensor)
+                _, conv3a, _, _, _ = self.get_conv_layers_with_hook(obs_tensor)
                 flat = conv3a.view(1, -1)
                 out = self.probe(flat)
                 probs = F.softmax(out, dim=-1)
@@ -237,7 +348,7 @@ class AblationController:
 
             # Check results
             with torch.no_grad():
-                _, _, conv4a, _ = self.get_conv_layers_with_hook(obs_tensor)
+                _, _, conv4a, _, _ = self.get_conv_layers_with_hook(obs_tensor)
                 flat = conv4a.view(1, -1)
                 out = self.conv4a_probe(flat)
                 probs = F.softmax(out, dim=-1)
@@ -258,7 +369,7 @@ class AblationController:
 
             # Check results
             with torch.no_grad():
-                _, _, _, fc1 = self.get_conv_layers_with_hook(obs_tensor)
+                _, _, _, fc1, _ = self.get_conv_layers_with_hook(obs_tensor)
                 fc1_flat = fc1.view(1, -1)
 
                 confidences = {}

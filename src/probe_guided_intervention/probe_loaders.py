@@ -128,3 +128,41 @@ def load_fc1_binary_probes(fc1_probe_dir='src/probe_training/binary_probes_20250
             print(f"Warning: Could not load fc1 probe for {entity}: {e}")
 
     return fc1_probes
+
+
+def load_fc3_binary_probes(fc3_probe_dir='src/probe_training/binary_probes_20250925_183257/'):
+    """Load all fc3 binary probes for each entity."""
+    fc3_probes = {}
+    entities = ['green_key', 'blue_key', 'red_key', 'gem', 'green_lock', 'blue_lock', 'red_lock']
+
+    for entity in entities:
+        probe_path = os.path.join(fc3_probe_dir, f'fc3_{entity}_probe.pt')
+        try:
+            probe_data = torch.load(probe_path, map_location='cpu')
+            probe_state = probe_data['probe_state_dict']
+            fc3_probes[entity] = build_binary_probe(probe_state)
+            fc3_probes[entity].eval()
+            print(f"Loaded fc3 probe for {entity}")
+        except Exception as e:
+            print(f"Warning: Could not load fc3 probe for {entity}: {e}")
+
+    return fc3_probes
+
+
+def load_fc2_binary_probes(fc2_probe_dir='src/probe_training/binary_probes_20250925_183257/'):
+    """Load all fc2 binary probes for each entity."""
+    fc2_probes = {}
+    entities = ['green_key', 'blue_key', 'red_key', 'gem', 'green_lock', 'blue_lock', 'red_lock']
+
+    for entity in entities:
+        probe_path = os.path.join(fc2_probe_dir, f'fc2_{entity}_probe.pt')
+        try:
+            probe_data = torch.load(probe_path, map_location='cpu')
+            probe_state = probe_data['probe_state_dict']
+            fc2_probes[entity] = build_binary_probe(probe_state)
+            fc2_probes[entity].eval()
+            print(f"Loaded fc2 probe for {entity}")
+        except Exception as e:
+            print(f"Warning: Could not load fc2 probe for {entity}: {e}")
+
+    return fc2_probes
