@@ -22,27 +22,53 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Model loading
 from utils.helpers import load_interpretable_model, save_observations_as_gif, save_rollout_as_gif
 from utils.create_intervention_mazes import create_cross_maze
+from utils.entity_collection_detector import detect_collections, get_collection_status
+from utils import heist
 
 
 class SingleFrameGradientAblator:
     """Ablate neurons to change action output on a single observation."""
 
     def __init__(self, model_path='base_models/full_run/model_35001.0.pt',
-                 probe_path='src/probe_training/trained_probes_20250904_080738/conv3a_probe.pt'):
+                 probe_path='src/probe_training/trained_probes_20250904_080738/conv3a_probe.pt',
+                 conv4a_probe_path='src/probe_training/trained_probes_20250904_080738/conv4a_probe.pt',
+                 fc1_probe_dir='src/probe_training/binary_probes_20250925_183257/'):
         """Initialize with model and probe."""
         # Load model
         self.model = load_interpretable_model(model_path=model_path)
         self.model.eval()
 
-        # Load probe
+        # Load conv3a probe
         probe_data = torch.load(probe_path, map_location='cpu')
         self.probe_state = probe_data['probe_state_dict']
         self.label_map = probe_data['label_map']
         self.reverse_map = {v: k for k, v in self.label_map.items()}
 
-        # Build probe
-        self.probe = self._build_probe()
+        # Build conv3a probe
+        self.probe = self._build_probe(self.probe_state)
         self.probe.eval()
+
+        # Load conv4a probe
+        conv4a_probe_data = torch.load(conv4a_probe_path, map_location='cpu')
+        self.conv4a_probe_state = conv4a_probe_data['probe_state_dict']
+
+        # Build conv4a probe
+        self.conv4a_probe = self._build_probe(self.conv4a_probe_state)
+        self.conv4a_probe.eval()
+
+        # Load all fc1 binary probes for each entity
+        self.fc1_probes = {}
+        entities = ['green_key', 'blue_key', 'red_key', 'gem', 'green_lock', 'blue_lock', 'red_lock']
+        for entity in entities:
+            probe_path = os.path.join(fc1_probe_dir, f'fc1_{entity}_probe.pt')
+            try:
+                probe_data = torch.load(probe_path, map_location='cpu')
+                probe_state = probe_data['probe_state_dict']
+                self.fc1_probes[entity] = self._build_binary_probe(probe_state)
+                self.fc1_probes[entity].eval()
+                print(f"Loaded fc1 probe for {entity}")
+            except Exception as e:
+                print(f"Warning: Could not load fc1 probe for {entity}: {e}")
 
         # Ablation tracking
         self.ablation_mask = None
@@ -50,17 +76,17 @@ class SingleFrameGradientAblator:
         self.total_neurons = 0
         self.ablated_count = 0
 
-    def _build_probe(self):
+    def _build_probe(self, probe_state):
         """Build probe from saved weights."""
         # Get dimensions from saved weights
-        first_weight = self.probe_state['probe.0.weight']
+        first_weight = probe_state['probe.0.weight']
         input_dim = first_weight.shape[1]
         hidden1_dim = first_weight.shape[0]
 
-        second_weight = self.probe_state['probe.3.weight']
+        second_weight = probe_state['probe.3.weight']
         hidden2_dim = second_weight.shape[0]
 
-        final_weight = self.probe_state['probe.6.weight']
+        final_weight = probe_state['probe.6.weight']
         num_classes = final_weight.shape[0]
 
         # Build probe network
@@ -75,12 +101,12 @@ class SingleFrameGradientAblator:
         )
 
         # Load saved weights
-        probe[0].weight.data = self.probe_state['probe.0.weight']
-        probe[0].bias.data = self.probe_state['probe.0.bias']
-        probe[3].weight.data = self.probe_state['probe.3.weight']
-        probe[3].bias.data = self.probe_state['probe.3.bias']
-        probe[6].weight.data = self.probe_state['probe.6.weight']
-        probe[6].bias.data = self.probe_state['probe.6.bias']
+        probe[0].weight.data = probe_state['probe.0.weight']
+        probe[0].bias.data = probe_state['probe.0.bias']
+        probe[3].weight.data = probe_state['probe.3.weight']
+        probe[3].bias.data = probe_state['probe.3.bias']
+        probe[6].weight.data = probe_state['probe.6.weight']
+        probe[6].bias.data = probe_state['probe.6.bias']
 
         # Set to eval mode to disable dropout
         for module in probe.modules():
@@ -89,29 +115,73 @@ class SingleFrameGradientAblator:
 
         return probe
 
-    def get_conv3a_with_hook(self, obs, requires_grad=False):
-        """Get conv3a activations and apply ablation mask."""
+    def _build_binary_probe(self, probe_state):
+        """Build binary probe from saved weights."""
+        # Get dimensions from saved weights
+        first_weight = probe_state['probe.0.weight']
+        input_dim = first_weight.shape[1]
+        hidden1_dim = first_weight.shape[0]
+
+        second_weight = probe_state['probe.3.weight']
+        hidden2_dim = second_weight.shape[0]
+
+        final_weight = probe_state['probe.6.weight']
+        num_classes = final_weight.shape[0]
+
+        # Build probe network matching the saved architecture
+        probe = nn.Sequential(
+            nn.Linear(input_dim, hidden1_dim),   # 0
+            nn.ReLU(),                            # 1
+            nn.Dropout(0.5),                      # 2
+            nn.Linear(hidden1_dim, hidden2_dim),  # 3
+            nn.ReLU(),                            # 4
+            nn.Dropout(0.5),                      # 5
+            nn.Linear(hidden2_dim, num_classes)   # 6
+        )
+
+        # Load saved weights
+        probe[0].weight.data = probe_state['probe.0.weight']
+        probe[0].bias.data = probe_state['probe.0.bias']
+        probe[3].weight.data = probe_state['probe.3.weight']
+        probe[3].bias.data = probe_state['probe.3.bias']
+        probe[6].weight.data = probe_state['probe.6.weight']
+        probe[6].bias.data = probe_state['probe.6.bias']
+
+        # Set to eval mode to disable dropout
+        for module in probe.modules():
+            if isinstance(module, nn.Dropout):
+                module.eval()
+
+        return probe
+
+    def get_conv_layers_with_hook(self, obs, requires_grad=False):
+        """Get conv3a, conv4a, and fc1 activations and apply ablation mask to conv3a."""
         activations = {}
 
         def hook(name):
             def fn(module, input, output):
-                # Apply ablation mask if it exists
-                if self.ablation_mask is not None:
+                # Apply ablation mask only to conv3a
+                if name == 'conv3a' and self.ablation_mask is not None:
                     output = output * self.ablation_mask.unsqueeze(0)
                 # Clone and detach to make it a leaf tensor if we need gradients
-                if requires_grad:
+                if requires_grad and name == 'conv3a':
                     output = output.clone().detach().requires_grad_(True)
                 activations[name] = output
-                return output
+                return output if name == 'conv3a' else None  # Only modify conv3a
             return fn
 
-        # Register hook
+        # Register hooks for conv3a, conv4a, and fc1
         handles = []
         for name, module in self.model.named_modules():
             if 'conv3a' in name and isinstance(module, nn.Conv2d):
                 handle = module.register_forward_hook(hook('conv3a'))
                 handles.append(handle)
-                break
+            elif 'conv4a' in name and isinstance(module, nn.Conv2d):
+                handle = module.register_forward_hook(hook('conv4a'))
+                handles.append(handle)
+            elif name == 'fc1' and isinstance(module, nn.Linear):
+                handle = module.register_forward_hook(hook('fc1'))
+                handles.append(handle)
 
         # Forward pass
         output = self.model(obs)
@@ -120,66 +190,213 @@ class SingleFrameGradientAblator:
         for handle in handles:
             handle.remove()
 
-        return output, activations.get('conv3a')
+        return output, activations.get('conv3a'), activations.get('conv4a'), activations.get('fc1')
 
-    def compute_action_change_gradients(self, obs, original_action, target_entity):
+    def get_conv3a_with_hook(self, obs, requires_grad=False):
+        """Backward compatibility wrapper."""
+        output, conv3a, _, _ = self.get_conv_layers_with_hook(obs, requires_grad)
+        return output, conv3a
+
+    def find_optimal_ablations_for_conv4a(self, obs, target_entity, max_trials=50):
         """
-        Compute gradients to change the action output.
+        Find conv3a ablations that make CONV4A probe predict target entity.
+        This is the key insight - we ablate conv3a to affect conv4a predictions!
 
         Args:
             obs: Single observation tensor [1, 3, 64, 64]
-            original_action: The original action the model would take
-            target_entity: Entity we want to redirect toward
+            target_entity: Entity we want conv4a probe to predict
+            max_trials: Number of random patterns to try
 
         Returns:
-            gradient_magnitude: Per-neuron gradient magnitudes
+            improved_mask: Boolean mask of neurons to keep (1) or ablate (0)
         """
         obs.requires_grad = False
 
-        # Get conv3a with gradients enabled
-        output, conv3a = self.get_conv3a_with_hook(obs, requires_grad=True)
+        # Get baseline predictions from BOTH probes
+        with torch.no_grad():
+            _, conv3a, conv4a = self.get_conv_layers_with_hook(obs)
+            if conv3a is None or conv4a is None:
+                raise RuntimeError("Failed to get conv activations")
 
-        if conv3a is None:
-            raise RuntimeError("Failed to get conv3a activations")
-
-        # Get action logits
-        if isinstance(output, tuple):
-            dist = output[0]
-            logits = dist.logits
-        else:
-            logits = output.logits
-
-        # Create loss to minimize original action and maximize others
-        action_probs = F.softmax(logits, dim=-1)
-
-        # Loss = maximize entropy + minimize original action probability
-        # This encourages the model to become uncertain and change its action
-        original_action_prob = action_probs[0, original_action]
-        entropy = -(action_probs * (action_probs + 1e-10).log()).sum()
-
-        # Strong loss to change action
-        loss = 3.0 * original_action_prob - 0.5 * entropy
-
-        # Also add probe-based guidance if we have a target entity
-        if target_entity:
-            # Get probe predictions from conv3a
-            flat_conv3a = conv3a.view(1, -1)
-            probe_outputs = self.probe(flat_conv3a)
-            probe_probs = F.softmax(probe_outputs, dim=-1)
+            # Check conv4a probe baseline
+            conv4a_flat = conv4a.view(1, -1)
+            conv4a_outputs = self.conv4a_probe(conv4a_flat)
+            conv4a_probs = F.softmax(conv4a_outputs, dim=-1)
 
             target_idx = self.reverse_map.get(target_entity)
-            if target_idx is not None:
-                target_prob = probe_probs[0, target_idx]
-                # Add probe guidance to loss
-                loss = loss - 0.5 * target_prob
+            if target_idx is None:
+                raise ValueError(f"Target entity {target_entity} not in label map")
 
-        # Compute gradients
-        loss.backward()
+            baseline_conv4a_prob = conv4a_probs[0, target_idx].item()
 
-        # Get gradient magnitude per neuron
-        grad_magnitude = conv3a.grad.abs()[0]  # Remove batch dimension
+        # Start with current mask
+        best_mask = self.ablation_mask.clone()
+        best_conv4a_prob = baseline_conv4a_prob
+        best_is_target = False
 
-        return grad_magnitude
+        print(f"    Conv4a optimization: Baseline P({target_entity})={baseline_conv4a_prob:.1%}")
+
+        # Random search: try different ablation patterns
+        for trial in range(max_trials):
+            # Create random ablation pattern
+            test_mask = torch.ones_like(self.ablation_mask)
+
+            # Try wider range of sparsity for conv4a effect
+            sparsity = np.random.uniform(0.1, 0.5)
+            ablate_positions = torch.rand_like(test_mask) < sparsity
+            test_mask[ablate_positions] = 0
+
+            # Apply test mask and check conv4a predictions
+            self.ablation_mask = test_mask
+            with torch.no_grad():
+                _, conv3a_test, conv4a_test = self.get_conv_layers_with_hook(obs)
+
+                # Check conv4a probe (this is what we're optimizing)
+                conv4a_flat = conv4a_test.view(1, -1)
+                conv4a_out = self.conv4a_probe(conv4a_flat)
+                conv4a_probs = F.softmax(conv4a_out, dim=-1)
+                conv4a_target_prob = conv4a_probs[0, target_idx].item()
+
+            # Check if this helps make target the argmax in conv4a
+            conv4a_pred_idx = conv4a_probs.argmax().item()
+            conv4a_is_target = (conv4a_pred_idx == target_idx)
+
+            # Accept if conv4a probe improves
+            if conv4a_is_target and (not best_is_target or conv4a_target_prob > best_conv4a_prob):
+                # Found a pattern that makes conv4a predict target!
+                best_mask = test_mask.clone()
+                best_conv4a_prob = conv4a_target_prob
+                best_is_target = True
+                num_ablated = (test_mask == 0).sum().item()
+
+                # Also check conv3a for reference
+                conv3a_flat = conv3a_test.view(1, -1)
+                conv3a_out = self.probe(conv3a_flat)
+                conv3a_probs = F.softmax(conv3a_out, dim=-1)
+                conv3a_prob = conv3a_probs[0, target_idx].item()
+
+                print(f"    Trial {trial}: CONV4A SUCCESS! Conv4a={conv4a_target_prob:.1%}, Conv3a={conv3a_prob:.1%}, Ablated={num_ablated}")
+
+                # If conv4a confidence is high enough, stop
+                if conv4a_target_prob > 0.7:  # Lower threshold since conv4a is harder
+                    print(f"    Achieved >70% conv4a confidence!")
+                    break
+            elif conv4a_target_prob > best_conv4a_prob + 0.05 and not best_is_target:
+                # Improvement in conv4a probability
+                best_mask = test_mask.clone()
+                best_conv4a_prob = conv4a_target_prob
+                num_ablated = (test_mask == 0).sum().item()
+                print(f"    Trial {trial}: Conv4a improved to {conv4a_target_prob:.1%}, Ablated={num_ablated}")
+
+        # Revert to best found mask
+        self.ablation_mask = best_mask
+
+        # Final summary
+        final_ablated = (best_mask == 0).sum().item()
+        print(f"    Conv4a optimization complete: Final P({target_entity})={best_conv4a_prob:.1%}, Total ablated={final_ablated}")
+
+        return best_mask
+
+    def find_optimal_ablations_for_fc1(self, obs, target_entity='green_key', max_trials=50):
+        """
+        Find conv3a ablations that maximize fc1 probe confidence for target entity
+        while minimizing confidence for all other entities.
+
+        Args:
+            obs: Single observation tensor [1, 3, 64, 64]
+            target_entity: Entity we want fc1 probes to predict (default: green_key)
+            max_trials: Number of random patterns to try
+
+        Returns:
+            improved_mask: Boolean mask of neurons to keep (1) or ablate (0)
+        """
+        obs.requires_grad = False
+
+        # Get baseline predictions from fc1 probes
+        with torch.no_grad():
+            _, conv3a, _, fc1 = self.get_conv_layers_with_hook(obs)
+            if conv3a is None or fc1 is None:
+                raise RuntimeError("Failed to get activations")
+
+            # Get baseline confidences for all entities
+            fc1_flat = fc1.view(1, -1)
+            baseline_confidences = {}
+            for entity, probe in self.fc1_probes.items():
+                output = probe(fc1_flat)
+                # Binary probe outputs [neg_logit, pos_logit], we want P(entity present)
+                probs = F.softmax(output, dim=-1)
+                confidence = probs[0, 1].item()  # Probability of class 1 (entity present)
+                baseline_confidences[entity] = confidence
+
+            print(f"    FC1 baseline confidences:")
+            for entity, conf in baseline_confidences.items():
+                print(f"      {entity}: {conf:.1%}")
+
+        # Start with current mask
+        best_mask = self.ablation_mask.clone()
+        best_target_conf = baseline_confidences.get(target_entity, 0.0)
+        best_others_sum = sum(conf for entity, conf in baseline_confidences.items() if entity != target_entity)
+        best_score = best_target_conf - 0.5 * best_others_sum  # Reward target, penalize others
+
+        print(f"    Starting optimization for {target_entity}")
+        print(f"    Baseline score: {best_score:.3f} (target={best_target_conf:.1%}, others_sum={best_others_sum:.1%})")
+
+        # Random search: try different ablation patterns
+        for trial in range(max_trials):
+            # Create random ablation pattern
+            test_mask = torch.ones_like(self.ablation_mask)
+
+            # Try wider range of sparsity for fc1 effect
+            sparsity = np.random.uniform(0.2, 0.6)
+            ablate_positions = torch.rand_like(test_mask) < sparsity
+            test_mask[ablate_positions] = 0
+
+            # Apply test mask and check fc1 predictions
+            self.ablation_mask = test_mask
+            with torch.no_grad():
+                _, _, _, fc1_test = self.get_conv_layers_with_hook(obs)
+
+                # Check all fc1 probes
+                fc1_flat = fc1_test.view(1, -1)
+                test_confidences = {}
+                for entity, probe in self.fc1_probes.items():
+                    output = probe(fc1_flat)
+                    probs = F.softmax(output, dim=-1)
+                    confidence = probs[0, 1].item()  # Probability of class 1 (entity present)
+                    test_confidences[entity] = confidence
+
+            # Calculate score: maximize target, minimize others
+            target_conf = test_confidences.get(target_entity, 0.0)
+            others_sum = sum(conf for entity, conf in test_confidences.items() if entity != target_entity)
+            score = target_conf - 0.5 * others_sum
+
+            # Accept if score improves
+            if score > best_score:
+                best_mask = test_mask.clone()
+                best_target_conf = target_conf
+                best_others_sum = others_sum
+                best_score = score
+                num_ablated = (test_mask == 0).sum().item()
+
+                print(f"    Trial {trial}: IMPROVED! Target={target_conf:.1%}, Others_sum={best_others_sum:.1%}, Score={score:.3f}, Ablated={num_ablated}")
+
+                # If target is very high and others are low, stop
+                if target_conf > 0.8 and others_sum < 1.0:
+                    print(f"    Achieved excellent separation!")
+                    break
+
+        # Revert to best found mask
+        self.ablation_mask = best_mask
+
+        # Final summary
+        final_ablated = (best_mask == 0).sum().item()
+        print(f"    FC1 optimization complete:")
+        print(f"      Target ({target_entity}): {best_target_conf:.1%}")
+        print(f"      Others sum: {best_others_sum:.1%}")
+        print(f"      Final score: {best_score:.3f}")
+        print(f"      Total ablated: {final_ablated}")
+
+        return best_mask
 
     def iterative_ablation_with_rollout(self, target_entity='green_key',
                                        max_steps=100, ablation_every_n_steps=5,
@@ -347,6 +564,9 @@ class SingleFrameGradientAblator:
             }
             results['steps'].append(step_info)
 
+            # Print probe predictions at every step
+            print(f"  Step {step}: Action={action}, Probe predicts: {predicted_entity}")
+
             # Take action in environment
             obs, reward, done, info = venv.step(np.array([action]))
             results['total_reward'] += reward[0] if isinstance(reward, np.ndarray) else reward
@@ -394,6 +614,23 @@ class SingleFrameGradientAblator:
         print(f"  Total steps: {len(results['steps'])}")
         print(f"  Total reward: {results['total_reward']}")
         print(f"  Final ablations: {self.ablated_count}/{self.total_neurons} ({self.ablated_count/self.total_neurons*100:.1f}%)")
+
+        # Save detailed log file
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = f'src/probe_guided_intervention/results/rollout_log_{target_entity}_{timestamp}.txt'
+        with open(log_path, 'w') as f:
+            f.write(f"Ablation Rollout Log\n")
+            f.write(f"Target Entity: {target_entity}\n")
+            f.write(f"Ablation Mode: {ablation_mode}\n")
+            f.write(f"Total Steps: {len(results['steps'])}\n")
+            f.write(f"Total Reward: {results['total_reward']}\n")
+            f.write(f"\nStep-by-Step Probe Predictions:\n")
+            f.write("-" * 60 + "\n")
+            for step_info in results['steps']:
+                f.write(f"Step {step_info['step']:3d}: Action={step_info['action']:2d}, "
+                       f"Probe={step_info['predicted_entity']:12s}, "
+                       f"Ablated={step_info['ablated_neurons']:4d} neurons\n")
+        print(f"\n📝 Saved detailed log to: {log_path}")
 
         return results
 
@@ -587,6 +824,526 @@ class SingleFrameGradientAblator:
 
         venv.close()
         return results
+
+    def test_green_key_first(self, max_steps=100, save_gif=True):
+        """
+        Test if ablations successfully steer agent to collect green_key first.
+        Success = green_key collected before any other entity.
+
+        Returns:
+            dict: Results including success status and collection order
+        """
+        print(f"\n{'='*60}")
+        print("GREEN KEY FIRST TEST")
+        print("Success = Collect green_key before any other entity")
+        print('='*60)
+
+        target_entity = 'green_key'
+
+        # Create cross maze
+        _, venv = create_cross_maze(include_locks=False)
+        obs = venv.reset()
+
+        # Initialize entity tracking
+        state = heist.state_from_venv(venv, 0)
+        entity_counts = None
+
+        # Store observations for GIF
+        observations_for_gif = []
+
+        # Track collections
+        collections = []
+        first_entity_collected = None
+
+        # Process first observation
+        if isinstance(obs, np.ndarray):
+            obs_array = obs
+        else:
+            obs_array = np.asarray(obs)
+
+        if len(obs_array.shape) == 4:
+            obs_array = obs_array[0]
+
+        # Initialize ablation mask
+        obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+        obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+        with torch.no_grad():
+            _, conv3a = self.get_conv3a_with_hook(obs_tensor)
+            if conv3a is not None:
+                self.ablation_mask = torch.ones_like(conv3a[0])
+                self.total_neurons = self.ablation_mask.numel()
+                self.ablated_count = 0
+
+        # Run rollout
+        for step in range(max_steps):
+            if save_gif:
+                observations_for_gif.append(obs_array.copy())
+
+            # Convert observation
+            obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+            obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+            # Use greedy search to optimize ablations for this step
+            print(f"\nStep {step}:")
+
+            # Get initial probe prediction
+            with torch.no_grad():
+                output, conv3a = self.get_conv3a_with_hook(obs_tensor)
+
+                if conv3a is not None:
+                    flat_conv3a = conv3a.view(1, -1)
+                    probe_out = self.probe(flat_conv3a)
+                    probe_probs = F.softmax(probe_out, dim=-1)
+                    pred_idx = probe_probs.argmax().item()
+                    predicted_entity = self.label_map.get(pred_idx, 'unknown')
+
+                    # Get confidence for target entity
+                    target_idx = self.reverse_map.get(target_entity)
+                    target_confidence = probe_probs[0, target_idx].item() if target_idx is not None else 0.0
+                    max_confidence = probe_probs.max().item()
+                else:
+                    predicted_entity = 'unknown'
+                    target_confidence = 0.0
+                    max_confidence = 0.0
+
+                # Get action
+                if isinstance(output, tuple):
+                    logits = output[0].logits
+                else:
+                    logits = output.logits
+                action_probs = F.softmax(logits, dim=-1)
+                action = action_probs.argmax().item()
+
+            print(f"  Initial: Probe={predicted_entity} ({max_confidence:.1%}), Target_conf={target_confidence:.1%}, Action={action}")
+
+            # If not already predicting target with high confidence, optimize ablations
+            if target_confidence < 0.9:
+                # Store initial mask state
+                initial_ablated = (self.ablation_mask == 0).sum().item()
+
+                # Use random search to find optimal ablations
+                self.ablation_mask = self.find_optimal_ablations_random(obs_tensor, target_entity, max_trials=20)
+                self.ablated_count = (self.ablation_mask == 0).sum().item()
+
+                # Report what changed
+                new_ablations = self.ablated_count - initial_ablated
+                if new_ablations > 0:
+                    print(f"  >>> Added {new_ablations} new ablations this step")
+
+                # Get final prediction after optimization
+                with torch.no_grad():
+                    output, conv3a = self.get_conv3a_with_hook(obs_tensor)
+                    if conv3a is not None:
+                        flat_conv3a = conv3a.view(1, -1)
+                        probe_out = self.probe(flat_conv3a)
+                        probe_probs = F.softmax(probe_out, dim=-1)
+                        pred_idx = probe_probs.argmax().item()
+                        predicted_entity = self.label_map.get(pred_idx, 'unknown')
+                        target_confidence = probe_probs[0, target_idx].item() if target_idx is not None else 0.0
+                        max_confidence = probe_probs.max().item()
+
+                        # Get updated action
+                        if isinstance(output, tuple):
+                            logits = output[0].logits
+                        else:
+                            logits = output.logits
+                        action_probs = F.softmax(logits, dim=-1)
+                        action = action_probs.argmax().item()
+            else:
+                print(f"  ✓ Already predicting {target_entity} with {target_confidence:.1%} confidence")
+
+            # Log final state
+            print(f"  Final: Probe={predicted_entity} ({max_confidence:.1%}), Target_conf={target_confidence:.1%}, Action={action}, Ablated={self.ablated_count}/{self.total_neurons}")
+
+            # Take action
+            obs, reward, done, info = venv.step(np.array([action]))
+
+            # Check for collections
+            state = heist.state_from_venv(venv, 0)
+            entity_counts, collected_this_step = detect_collections(state, entity_counts)
+
+            # Track collections
+            if collected_this_step:
+                for entity in collected_this_step:
+                    collections.append((step, entity))
+                    if first_entity_collected is None:
+                        first_entity_collected = entity
+                    print(f"  >>> COLLECTED: {entity} <<<")
+
+                    # Check success/failure
+                    if entity == 'green_key':
+                        print(f"\n🎉 SUCCESS! Green key collected first at step {step}")
+                        done = [True]  # End episode
+                    else:
+                        print(f"\n❌ FAILURE: {entity} collected before green_key at step {step}")
+                        done = [True]  # End episode
+
+            # Update observation
+            if isinstance(obs, np.ndarray):
+                obs_array = obs
+            else:
+                obs_array = np.asarray(obs)
+
+            if len(obs_array.shape) == 4:
+                obs_array = obs_array[0]
+
+            # Check if done
+            is_done = done[0] if isinstance(done, np.ndarray) else done
+            if is_done:
+                break
+
+        # Save GIF
+        if save_gif and observations_for_gif:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            gif_path = f'src/probe_guided_intervention/results/green_key_test_{timestamp}.gif'
+            os.makedirs('src/probe_guided_intervention/results', exist_ok=True)
+
+            save_observations_as_gif(
+                observations_for_gif,
+                filepath=gif_path,
+                fps=10,
+                enhance_size=True
+            )
+            print(f"\n📹 Saved test GIF to: {gif_path}")
+
+        venv.close()
+
+        # Prepare results
+        results = {
+            'success': first_entity_collected == 'green_key' if first_entity_collected else False,
+            'first_collected': first_entity_collected,
+            'all_collections': collections,
+            'total_steps': step + 1,
+            'total_ablated': self.ablated_count,
+            'ablation_percentage': (self.ablated_count / self.total_neurons * 100) if self.total_neurons > 0 else 0
+        }
+
+        # Print summary
+        print("\n" + "="*60)
+        print("TEST RESULTS")
+        print("="*60)
+        print(f"Success: {'✅ YES' if results['success'] else '❌ NO'}")
+        print(f"First entity collected: {first_entity_collected or 'None'}")
+        print(f"All collections: {collections}")
+        print(f"Total steps: {results['total_steps']}")
+        print(f"Ablations: {results['total_ablated']}/{self.total_neurons} ({results['ablation_percentage']:.1f}%)")
+
+        return results
+
+    def test_conv4a_optimization_rollout(self, max_steps=30, reoptimize_each_step=True):
+        """
+        Test conv4a optimization during rollout with re-optimization at each step.
+        """
+        print(f"\n{'='*60}")
+        print("CONV4A RE-OPTIMIZATION ROLLOUT TEST")
+        print(f"Re-optimize each step: {reoptimize_each_step}")
+        print('='*60)
+
+        from src.utils.helpers import save_observations_as_gif
+        from src.utils.entity_collection_detector import detect_collections
+        import src.utils.heist as heist
+
+        # Create cross maze
+        _, venv = create_cross_maze(include_locks=False)
+        obs = venv.reset()
+
+        # Convert observation
+        if isinstance(obs, np.ndarray):
+            obs_array = obs
+        else:
+            obs_array = np.asarray(obs)
+        if len(obs_array.shape) == 4:
+            obs_array = obs_array[0]
+
+        # Initialize tracking
+        state = heist.state_from_venv(venv, 0)
+        entity_counts = None
+        observations_for_gif = []
+        collections = []
+        first_entity_collected = None
+
+        # Initialize ablation mask
+        obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+        obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+        with torch.no_grad():
+            _, conv3a, conv4a = self.get_conv_layers_with_hook(obs_tensor)
+            if conv3a is not None:
+                self.ablation_mask = torch.ones_like(conv3a[0])
+                self.total_neurons = self.ablation_mask.numel()
+
+        # Run rollout
+        for step in range(max_steps):
+            observations_for_gif.append(obs_array.copy())
+
+            # Convert observation
+            obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+            obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+            print(f"\nStep {step}:")
+
+            # Optimize ablations for conv4a prediction
+            if step == 0 or reoptimize_each_step:
+                print(f"  Re-optimizing ablations for conv4a...")
+                self.ablation_mask = self.find_optimal_ablations_for_conv4a(
+                    obs_tensor, 'green_key', max_trials=30
+                )
+                self.ablated_count = (self.ablation_mask == 0).sum().item()
+
+            # Get predictions with current ablations
+            with torch.no_grad():
+                output, conv3a, conv4a = self.get_conv_layers_with_hook(obs_tensor)
+
+                # Check conv3a probe
+                if conv3a is not None:
+                    conv3a_flat = conv3a.view(1, -1)
+                    conv3a_out = self.probe(conv3a_flat)
+                    conv3a_probs = F.softmax(conv3a_out, dim=-1)
+                    conv3a_pred_idx = conv3a_probs.argmax().item()
+                    conv3a_entity = self.label_map.get(conv3a_pred_idx, 'unknown')
+                    conv3a_conf = conv3a_probs.max().item()
+
+                    # Get green_key confidence
+                    green_idx = self.reverse_map.get('green_key')
+                    conv3a_green_conf = conv3a_probs[0, green_idx].item() if green_idx is not None else 0.0
+
+                # Check conv4a probe
+                if conv4a is not None:
+                    conv4a_flat = conv4a.view(1, -1)
+                    conv4a_out = self.conv4a_probe(conv4a_flat)
+                    conv4a_probs = F.softmax(conv4a_out, dim=-1)
+                    conv4a_pred_idx = conv4a_probs.argmax().item()
+                    conv4a_entity = self.label_map.get(conv4a_pred_idx, 'unknown')
+                    conv4a_conf = conv4a_probs.max().item()
+
+                    # Get green_key confidence
+                    conv4a_green_conf = conv4a_probs[0, green_idx].item() if green_idx is not None else 0.0
+
+                # Get action
+                if isinstance(output, tuple):
+                    logits = output[0].logits
+                else:
+                    logits = output.logits
+                action = F.softmax(logits, dim=-1).argmax().item()
+
+            print(f"  Conv3a: {conv3a_entity} ({conv3a_conf:.1%}), green_key={conv3a_green_conf:.1%}")
+            print(f"  Conv4a: {conv4a_entity} ({conv4a_conf:.1%}), green_key={conv4a_green_conf:.1%}")
+            print(f"  Action: {action}, Ablated: {self.ablated_count}/{self.total_neurons}")
+
+            # Take action
+            obs, reward, done, info = venv.step(np.array([action]))
+
+            # Check for collections
+            state = heist.state_from_venv(venv, 0)
+            entity_counts, collected_this_step = detect_collections(state, entity_counts)
+
+            if collected_this_step:
+                for entity in collected_this_step:
+                    collections.append((step, entity))
+                    if first_entity_collected is None:
+                        first_entity_collected = entity
+                    print(f"  >>> COLLECTED: {entity} <<<")
+
+                    if entity == 'green_key':
+                        print(f"\n🎉 SUCCESS! Green key collected at step {step}")
+                        done = [True]
+                    else:
+                        print(f"\n❌ FAILURE: {entity} collected before green_key")
+                        done = [True]
+
+            # Update observation
+            if isinstance(obs, np.ndarray):
+                obs_array = obs
+            else:
+                obs_array = np.asarray(obs)
+            if len(obs_array.shape) == 4:
+                obs_array = obs_array[0]
+
+            # Check if done
+            is_done = done[0] if isinstance(done, np.ndarray) else done
+            if is_done:
+                break
+
+        # Save GIF
+        if observations_for_gif:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            gif_path = f'src/probe_guided_intervention/results/conv4a_reoptimize_{timestamp}.gif'
+            os.makedirs('src/probe_guided_intervention/results', exist_ok=True)
+
+            save_observations_as_gif(
+                observations_for_gif,
+                filepath=gif_path,
+                fps=10,
+                enhance_size=True
+            )
+            print(f"\n📹 Saved GIF to: {gif_path}")
+
+        venv.close()
+
+        # Report results
+        print(f"\n{'='*60}")
+        print("TEST RESULTS")
+        print('='*60)
+        print(f"First entity collected: {first_entity_collected}")
+        print(f"Collections: {collections}")
+        print(f"Success: {'✓' if first_entity_collected == 'green_key' else '✗'}")
+
+        return {
+            'success': first_entity_collected == 'green_key',
+            'first_collected': first_entity_collected,
+            'collections': collections,
+            'gif_path': gif_path if observations_for_gif else None
+        }
+
+    def test_fc1_optimization_rollout(self, max_steps=30, reoptimize_each_step=True):
+        """
+        Test fc1 optimization during rollout with optional re-optimization at each step.
+        """
+        print(f"\n{'='*60}")
+        print("FC1 OPTIMIZATION ROLLOUT TEST")
+        print(f"Re-optimize each step: {reoptimize_each_step}")
+        print('='*60)
+
+        from src.utils.helpers import save_observations_as_gif
+        from src.utils.entity_collection_detector import detect_collections
+        import src.utils.heist as heist
+
+        # Create cross maze
+        _, venv = create_cross_maze(include_locks=False)
+        obs = venv.reset()
+
+        # Convert observation
+        if isinstance(obs, np.ndarray):
+            obs_array = obs
+        else:
+            obs_array = np.asarray(obs)
+        if len(obs_array.shape) == 4:
+            obs_array = obs_array[0]
+
+        # Initialize tracking
+        state = heist.state_from_venv(venv, 0)
+        entity_counts = None
+        observations_for_gif = []
+        collections = []
+        first_entity_collected = None
+
+        # Initialize ablation mask
+        obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+        obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+        with torch.no_grad():
+            _, conv3a, _, fc1 = self.get_conv_layers_with_hook(obs_tensor)
+            if conv3a is not None:
+                self.ablation_mask = torch.ones_like(conv3a[0])
+                self.total_neurons = self.ablation_mask.numel()
+
+        # Run rollout
+        for step in range(max_steps):
+            observations_for_gif.append(obs_array.copy())
+
+            # Convert observation
+            obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+            obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+            print(f"\nStep {step}:")
+
+            # Optimize ablations for fc1 prediction
+            if step == 0 or reoptimize_each_step:
+                print(f"  Re-optimizing ablations for fc1...")
+                self.ablation_mask = self.find_optimal_ablations_for_fc1(
+                    obs_tensor, 'green_key', max_trials=30
+                )
+                self.ablated_count = (self.ablation_mask == 0).sum().item()
+
+            # Get predictions with current ablations
+            with torch.no_grad():
+                output, conv3a, conv4a, fc1 = self.get_conv_layers_with_hook(obs_tensor)
+
+                # Check fc1 probes for all entities
+                if fc1 is not None:
+                    fc1_flat = fc1.view(1, -1)
+
+                    print(f"  FC1 predictions:")
+                    for entity, probe in self.fc1_probes.items():
+                        out = probe(fc1_flat)
+                        probs = F.softmax(out, dim=-1)
+                        conf = probs[0, 1].item()
+                        print(f"    {entity}: {conf:.1%}")
+
+                # Get action
+                if isinstance(output, tuple):
+                    logits = output[0].logits
+                else:
+                    logits = output.logits
+                action = F.softmax(logits, dim=-1).argmax().item()
+
+            print(f"  Action: {action}, Ablated: {self.ablated_count}/{self.total_neurons}")
+
+            # Take action
+            obs, reward, done, info = venv.step(np.array([action]))
+
+            # Check for collections
+            state = heist.state_from_venv(venv, 0)
+            entity_counts, collected_this_step = detect_collections(state, entity_counts)
+
+            if collected_this_step:
+                for entity in collected_this_step:
+                    collections.append((step, entity))
+                    if first_entity_collected is None:
+                        first_entity_collected = entity
+                    print(f"  >>> COLLECTED: {entity} <<<")
+
+                    if entity == 'green_key':
+                        print(f"\n🎉 SUCCESS! Green key collected at step {step}")
+                        done = [True]
+                    else:
+                        print(f"\n❌ FAILURE: {entity} collected before green_key")
+                        done = [True]
+
+            # Update observation
+            if isinstance(obs, np.ndarray):
+                obs_array = obs
+            else:
+                obs_array = np.asarray(obs)
+            if len(obs_array.shape) == 4:
+                obs_array = obs_array[0]
+
+            # Check if done
+            is_done = done[0] if isinstance(done, np.ndarray) else done
+            if is_done:
+                break
+
+        # Save GIF
+        if observations_for_gif:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            gif_path = f'src/probe_guided_intervention/results/fc1_reoptimize_{timestamp}.gif'
+            os.makedirs('src/probe_guided_intervention/results', exist_ok=True)
+
+            save_observations_as_gif(
+                observations_for_gif,
+                filepath=gif_path,
+                fps=10,
+                enhance_size=True
+            )
+            print(f"\n📹 Saved GIF to: {gif_path}")
+
+        venv.close()
+
+        # Report results
+        print(f"\n{'='*60}")
+        print("TEST RESULTS")
+        print('='*60)
+        print(f"First entity collected: {first_entity_collected}")
+        print(f"Collections: {collections}")
+        print(f"Success: {'✓' if first_entity_collected == 'green_key' else '✗'}")
+
+        return {
+            'success': first_entity_collected == 'green_key',
+            'first_collected': first_entity_collected,
+            'collections': collections,
+            'gif_path': gif_path if observations_for_gif else None
+        }
 
     def visualize_ablation_pattern(self, save_path=None):
         """Visualize which neurons were ablated."""
@@ -798,6 +1555,174 @@ def test_robust_ablations(target_entity='green_key', num_mazes=10):
         venv.close()
 
     return ablator
+
+def test_conv4a_optimization_rollout_standalone(max_steps=30, reoptimize_each_step=True):
+        """
+        Test conv4a optimization during rollout.
+        Args:
+            max_steps: Maximum steps in rollout
+            reoptimize_each_step: Whether to re-optimize at each step
+        """
+        print(f"\n{'='*60}")
+        print("CONV4A OPTIMIZATION ROLLOUT TEST")
+        print(f"Re-optimize each step: {reoptimize_each_step}")
+        print('='*60)
+
+        from src.utils.helpers import save_observations_as_gif
+        from src.utils.entity_collection_detector import detect_collections
+        import src.utils.heist as heist
+
+        # Create cross maze
+        _, venv = create_cross_maze(include_locks=False)
+        obs = venv.reset()
+
+        # Convert observation
+        if isinstance(obs, np.ndarray):
+            obs_array = obs
+        else:
+            obs_array = np.asarray(obs)
+        if len(obs_array.shape) == 4:
+            obs_array = obs_array[0]
+
+        # Initialize tracking
+        state = heist.state_from_venv(venv, 0)
+        entity_counts = None
+        observations_for_gif = []
+        collections = []
+        first_entity_collected = None
+
+        # Initialize ablation mask
+        obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+        obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+        with torch.no_grad():
+            _, conv3a, conv4a = self.get_conv_layers_with_hook(obs_tensor)
+            if conv3a is not None:
+                self.ablation_mask = torch.ones_like(conv3a[0])
+                self.total_neurons = self.ablation_mask.numel()
+
+        # Run rollout
+        for step in range(max_steps):
+            observations_for_gif.append(obs_array.copy())
+
+            # Convert observation
+            obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0)
+            obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+
+            print(f"\nStep {step}:")
+
+            # Optimize ablations for conv4a prediction
+            if step == 0 or reoptimize_each_step:
+                print(f"  Optimizing ablations for conv4a...")
+                self.ablation_mask = self.find_optimal_ablations_for_conv4a(
+                    obs_tensor, 'green_key', max_trials=30
+                )
+                self.ablated_count = (self.ablation_mask == 0).sum().item()
+
+            # Get predictions with current ablations
+            with torch.no_grad():
+                output, conv3a, conv4a = self.get_conv_layers_with_hook(obs_tensor)
+
+                # Check conv3a probe
+                if conv3a is not None:
+                    conv3a_flat = conv3a.view(1, -1)
+                    conv3a_out = self.probe(conv3a_flat)
+                    conv3a_probs = F.softmax(conv3a_out, dim=-1)
+                    conv3a_pred_idx = conv3a_probs.argmax().item()
+                    conv3a_entity = self.label_map.get(conv3a_pred_idx, 'unknown')
+                    conv3a_conf = conv3a_probs.max().item()
+
+                    # Get green_key confidence
+                    green_idx = self.reverse_map.get('green_key')
+                    conv3a_green_conf = conv3a_probs[0, green_idx].item() if green_idx is not None else 0.0
+
+                # Check conv4a probe
+                if conv4a is not None:
+                    conv4a_flat = conv4a.view(1, -1)
+                    conv4a_out = self.conv4a_probe(conv4a_flat)
+                    conv4a_probs = F.softmax(conv4a_out, dim=-1)
+                    conv4a_pred_idx = conv4a_probs.argmax().item()
+                    conv4a_entity = self.label_map.get(conv4a_pred_idx, 'unknown')
+                    conv4a_conf = conv4a_probs.max().item()
+
+                    # Get green_key confidence
+                    conv4a_green_conf = conv4a_probs[0, green_idx].item() if green_idx is not None else 0.0
+
+                # Get action
+                if isinstance(output, tuple):
+                    logits = output[0].logits
+                else:
+                    logits = output.logits
+                action = F.softmax(logits, dim=-1).argmax().item()
+
+            print(f"  Conv3a: {conv3a_entity} ({conv3a_conf:.1%}), green_key={conv3a_green_conf:.1%}")
+            print(f"  Conv4a: {conv4a_entity} ({conv4a_conf:.1%}), green_key={conv4a_green_conf:.1%}")
+            print(f"  Action: {action}, Ablated: {self.ablated_count}/{self.total_neurons}")
+
+            # Take action
+            obs, reward, done, info = venv.step(np.array([action]))
+
+            # Check for collections
+            state = heist.state_from_venv(venv, 0)
+            entity_counts, collected_this_step = detect_collections(state, entity_counts)
+
+            if collected_this_step:
+                for entity in collected_this_step:
+                    collections.append((step, entity))
+                    if first_entity_collected is None:
+                        first_entity_collected = entity
+                    print(f"  >>> COLLECTED: {entity} <<<")
+
+                    if entity == 'green_key':
+                        print(f"\n🎉 SUCCESS! Green key collected at step {step}")
+                        done = [True]
+                    else:
+                        print(f"\n❌ FAILURE: {entity} collected before green_key")
+                        done = [True]
+
+            # Update observation
+            if isinstance(obs, np.ndarray):
+                obs_array = obs
+            else:
+                obs_array = np.asarray(obs)
+            if len(obs_array.shape) == 4:
+                obs_array = obs_array[0]
+
+            # Check if done
+            is_done = done[0] if isinstance(done, np.ndarray) else done
+            if is_done:
+                break
+
+        # Save GIF
+        if observations_for_gif:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            gif_path = f'src/probe_guided_intervention/results/conv4a_reoptimize_{timestamp}.gif'
+            os.makedirs('src/probe_guided_intervention/results', exist_ok=True)
+
+            save_observations_as_gif(
+                observations_for_gif,
+                filepath=gif_path,
+                fps=10,
+                enhance_size=True
+            )
+            print(f"\n📹 Saved GIF to: {gif_path}")
+
+        venv.close()
+
+        # Report results
+        print(f"\n{'='*60}")
+        print("TEST RESULTS")
+        print('='*60)
+        print(f"First entity collected: {first_entity_collected}")
+        print(f"Collections: {collections}")
+        print(f"Success: {'✓' if first_entity_collected == 'green_key' else '✗'}")
+
+        return {
+            'success': first_entity_collected == 'green_key',
+            'first_collected': first_entity_collected,
+            'collections': collections,
+            'gif_path': gif_path if observations_for_gif else None
+        }
 
 
 def main():
