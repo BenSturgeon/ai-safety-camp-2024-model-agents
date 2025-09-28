@@ -2,7 +2,7 @@
 Main ablation controller that coordinates probe-guided interventions.
 Uses modular components for probe loading, optimization, and experiments.
 """
-
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,7 +36,8 @@ from .rollout_experiments import (
     test_conv4a_optimization_rollout,
     test_fc1_optimization_rollout
 )
-
+from src.probe_guided_intervention.rollout_experiments import test_sequential_target_collection
+from src.probe_guided_intervention.rollout_experiments import test_fc3_optimization_rollout
 
 class AblationController:
     """Main controller for probe-guided neural network ablations."""
@@ -56,24 +57,35 @@ class AblationController:
             conv4a_probe_path: Path to conv4a probe
             fc1_probe_dir: Directory containing fc1 binary probes
         """
-        # Load model
+        # Force CPU to avoid device mismatch issues
+        self.device = torch.device('cpu')
         self.model = load_interpretable_model(model_path=model_path)
+        self.model = self.model.to(self.device)
         self.model.eval()
+        print(f"Model loaded on device: {self.device} (forced CPU)")
 
         # Load conv3a probe
         self.probe, self.label_map, self.reverse_map = load_conv3a_probe(probe_path)
+        self.probe = self.probe.to(self.device)
 
         # Load conv4a probe
         self.conv4a_probe = load_conv4a_probe(conv4a_probe_path)
+        self.conv4a_probe = self.conv4a_probe.to(self.device)
 
         # Load fc1 binary probes
         self.fc1_probes = load_fc1_binary_probes(fc1_probe_dir)
+        for probe in self.fc1_probes.values():
+            probe.to(self.device)
 
         # Load fc2 binary probes
         self.fc2_probes = load_fc2_binary_probes(fc2_probe_dir)
+        for probe in self.fc2_probes.values():
+            probe.to(self.device)
 
         # Load fc3 binary probes (policy layer)
         self.fc3_probes = load_fc3_binary_probes()
+        for probe in self.fc3_probes.values():
+            probe.to(self.device)
 
         # Ablation tracking
         self.ablation_mask = None  # For conv3a
@@ -108,8 +120,13 @@ class AblationController:
         def hook(name):
             def fn(module, input, output):
                 # Apply ablation masks based on which layer we're ablating
-                if name == 'conv3a' and self.ablation_mask is not None and self.ablation_layer == 'conv3a':
-                    output = output * self.ablation_mask.unsqueeze(0)
+                if name == 'conv3a':
+                    # Check for override first (for intervention optimization)
+                    if hasattr(self, 'conv3a_override') and self.conv3a_override is not None:
+                        output = self.conv3a_override
+                    # Otherwise apply ablation mask if set
+                    elif self.ablation_mask is not None and self.ablation_layer == 'conv3a':
+                        output = output * self.ablation_mask.unsqueeze(0)
                 elif name == 'conv4a' and self.conv4a_ablation_mask is not None and self.ablation_layer == 'conv4a':
                     output = output * self.conv4a_ablation_mask.unsqueeze(0)
                 elif name == 'fc2' and self.fc2_ablation_mask is not None and self.ablation_layer == 'fc2':
@@ -283,6 +300,16 @@ class AblationController:
         """Test fc1 optimization during rollout."""
         return test_fc1_optimization_rollout(self, max_steps, reoptimize_each_step)
 
+    def test_fc3_optimization_rollout(self, target_entity='green_key', max_steps=30, reoptimize_each_step=True, layer='conv3a'):
+        """Test FC3 optimization during rollout using conv2a or conv3a modifications."""
+        
+        return test_fc3_optimization_rollout(self, target_entity, max_steps, reoptimize_each_step, layer)
+
+    def test_sequential_target_collection(self, target_sequence=['red_key', 'green_key', 'blue_key', 'gem'], max_steps=100, layer='conv2a_multilayer', optimize_every_step=True, optimization_steps=1000):
+        """Test sequential collection of multiple targets."""
+        
+        return test_sequential_target_collection(self, target_sequence, max_steps, layer, optimize_every_step, optimization_steps)
+
     def run_single_optimization_test(self, layer='fc1', target_entity='green_key'):
         """
         Run a single test of optimization on a specific layer.
@@ -415,7 +442,6 @@ class AblationController:
 
 def main():
     """Example usage of the AblationController."""
-    import sys
 
     # Create controller
     controller = AblationController()

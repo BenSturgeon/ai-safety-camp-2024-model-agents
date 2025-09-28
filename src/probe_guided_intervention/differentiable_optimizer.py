@@ -50,97 +50,86 @@ class DifferentiableAblationOptimizer:
         return mask
 
     def optimize_for_probes(self, controller, obs, target_entity='green_key',
-                           layer='conv3a', n_steps=100, sparsity_weight=0.01):
+                           layer='conv3a', n_steps=100, min_threshold=0.8):
         """
-        Optimize mask to maximize target probe while suppressing others
+        Optimize conv3a modifications to improve all downstream probes equally.
 
         Args:
             controller: AblationController instance
             obs: Observation tensor
             target_entity: Entity to optimize for
-            layer: Which layer to ablate ('conv3a', 'conv4a', 'fc1', 'fc2')
-            n_steps: Number of optimization steps
-            sparsity_weight: L1 penalty weight for sparsity
+            layer: Which layer to modify (currently only 'conv3a' supported)
+            n_steps: Maximum number of optimization steps
+            min_threshold: Minimum probe accuracy to achieve (default 0.8)
         """
-        controller.ablation_layer = layer
+        from src.probe_guided_intervention.intervention_loss import compute_intervention_loss
+
+        if layer != 'conv3a':
+            raise ValueError("Currently only conv3a modification is supported")
+
         # Keep everything on CPU for compatibility with the model
         obs = obs.cpu()
 
-        print(f"Optimizing {layer} ablations for {target_entity}...")
-        print(f"Mask shape: {self.mask_logits.shape}")
+        print(f"Optimizing {layer} modifications for {target_entity}...")
+        print(f"Target threshold: {min_threshold:.0%} for all probes")
 
-        best_target_prob = 0
-        best_mask = None
+        # Get original conv3a
+        with torch.no_grad():
+            _, conv3a_original, _, _, _, _ = controller.get_conv_layers_with_hook(obs)
+
+        # Initialize conv3a_modified as learnable parameter
+        conv3a_modified = nn.Parameter(conv3a_original.clone().requires_grad_(True))
+        optimizer = torch.optim.Adam([conv3a_modified], lr=0.05)  # Higher learning rate
+
+        best_min_prob = 0
+        best_conv3a = None
+        patience = 0
+        max_patience = 100  # More patience for harder optimizations
 
         for step in range(n_steps):
-            # Get differentiable mask
-            mask = self.get_mask(hard=True)
-
-            # Apply mask based on layer (ensure CPU for consistency with model)
-            if layer == 'conv3a':
-                controller.ablation_mask = mask.cpu()
-            elif layer == 'conv4a':
-                controller.conv4a_ablation_mask = mask.cpu()
-            elif layer == 'fc2':
-                controller.fc2_ablation_mask = mask.cpu()
-            else:
-                raise ValueError(f"Unsupported layer: {layer}")
-
-            # Forward pass through network
-            _, conv3a, _, fc1, _, _ = controller.get_conv_layers_with_hook(obs)
-
-            # Compute probe predictions
-            fc1_flat = fc1.view(1, -1)
-            target_logits = controller.fc1_probes[target_entity](fc1_flat)
-            target_prob = F.softmax(target_logits, dim=-1)[0, 1]
-
-            # Compute competing entity scores
-            other_probs = []
-            for entity, probe in controller.fc1_probes.items():
-                if entity != target_entity:
-                    logits = probe(fc1_flat)
-                    prob = F.softmax(logits, dim=-1)[0, 1]
-                    other_probs.append(prob)
-
-            # Loss: maximize target, minimize others, encourage sparsity
-            loss = -target_prob  # Maximize target
-            loss += 0.5 * sum(other_probs) / len(other_probs) if other_probs else 0  # Minimize others
-            loss += sparsity_weight * (1 - mask).mean()  # Encourage ablation (penalize zeros, not ones)
+            # Compute loss
+            loss, metrics = compute_intervention_loss(
+                conv3a_modified, controller, obs, target=target_entity
+            )
 
             # Backprop and update
-            self.optimizer.zero_grad()
+            optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            optimizer.step()
 
-            # Track best mask
-            if target_prob > best_target_prob:
-                best_target_prob = target_prob
-                best_mask = mask.detach().clone()
-
-            # Anneal temperature
-            if step > 0 and step % 20 == 0:
-                self.temperature = max(0.1, self.temperature * 0.8)
+            # Track best result
+            min_prob = metrics['min_prob']
+            if min_prob > best_min_prob:
+                best_min_prob = min_prob
+                best_conv3a = conv3a_modified.detach().clone()
+                patience = 0
+            else:
+                patience += 1
 
             # Report progress
             if step % 10 == 0:
-                n_ablated = (mask < 0.5).sum().item()
-                others_avg = sum(other_probs) / len(other_probs) if other_probs else 0
-                print(f"Step {step}: target={target_prob:.1%}, others_avg={others_avg:.1%}, "
-                      f"ablated={n_ablated}, temp={self.temperature:.3f}, loss={loss.item():.3f}")
+                print(f"Step {step}: min_prob={min_prob:.1%}, "
+                      f"probs={metrics['probe_probs']}, "
+                      f"loss={loss.item():.3f}")
 
-                if target_prob > 0.9:
-                    print(f"✓ Achieved >90% at step {step}!")
+                # Check if we've achieved threshold
+                if min_prob >= min_threshold:
+                    print(f"✓ All probes above {min_threshold:.0%} at step {step}!")
                     break
 
-        # Return final binary mask
-        self.training = False
-        final_mask = (torch.sigmoid(self.mask_logits) > 0.5).float()
+            # Early stopping if no improvement
+            if patience >= max_patience:
+                print(f"Early stopping - no improvement for {max_patience} steps")
+                break
 
         print(f"\nOptimization complete:")
-        print(f"  Best target probability: {best_target_prob:.1%}")
-        print(f"  Final ablated neurons: {(final_mask < 0.5).sum().item()}/{final_mask.numel()}")
+        print(f"  Best minimum probability: {best_min_prob:.1%}")
+        print(f"  Final probe accuracies: {metrics['probe_probs']}")
 
-        return final_mask
+        if best_min_prob < min_threshold:
+            print(f"  ⚠ Warning: Failed to reach {min_threshold:.0%} threshold")
+
+        return best_conv3a if best_conv3a is not None else conv3a_modified.detach()
 
 
 def test_differentiable_optimization():

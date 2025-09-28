@@ -12,6 +12,17 @@ from src.utils.helpers import save_observations_as_gif
 from src.utils.entity_collection_detector import detect_collections
 from src.utils.create_intervention_mazes import create_cross_maze
 import src.utils.heist as heist
+import torch.nn as nn
+
+# Import optimizers at module level to avoid repeated imports
+from src.probe_guided_intervention.conv2a_optimizer import (
+    optimize_conv2a_for_fc3,
+    get_conv2a_activations
+)
+# Use fast version for multilayer optimization
+from src.probe_guided_intervention.conv2a_optimizer_fast import optimize_conv2a_multilayer
+from src.probe_guided_intervention.conv3a_optimizer import optimize_conv3a_multilayer
+# from src.probe_guided_intervention.fc3_focused_loss import compute_fc3_adversarial_loss  # Commented out - causing import hang
 
 
 def test_green_key_first(ablator, max_steps=100, save_gif=True):
@@ -390,19 +401,156 @@ def test_conv4a_optimization_rollout(ablator, max_steps=30, reoptimize_each_step
     }
 
 
+def test_sequential_target_collection(controller, target_sequence=['red_key', 'green_key', 'blue_key', 'gem'], max_steps=100, layer='conv2a_multilayer', optimize_every_step=True, optimization_steps=1000):
+    """Test sequential collection of multiple targets, switching after each collection."""
+    print(f"\n{'='*60}")
+    print(f"SEQUENTIAL TARGET COLLECTION TEST ({layer.upper()})")
+    print(f"Target sequence: {' -> '.join(target_sequence)}")
+    print(f"Max steps: {max_steps}")
+    print('='*60)
+
+    # Create environment
+    _, venv = create_cross_maze(include_locks=False)
+    obs = venv.reset()
+
+    # Track collections and current target
+    all_collections = []
+    fc3_probs_history = []
+    neurons_modified_history = []
+    current_target_idx = 0
+    current_target = target_sequence[current_target_idx]
+    observations_for_gif = []
+
+    print(f"\n🎯 Starting with target: {current_target}")
+
+    for step in range(max_steps):
+        # Store observation for GIF
+        obs_array = obs[0] if isinstance(obs, (list, tuple)) else obs
+        if obs_array.ndim == 4:  # If batch dimension already present
+            obs_array = obs_array[0]
+        observations_for_gif.append(obs_array.copy())
+        obs_tensor = torch.from_numpy(obs_array).float().unsqueeze(0).permute(0, 3, 1, 2)
+
+        # Optimize for current target
+        if step == 0 or optimize_every_step:
+            print(f"\n  === Step {step}: Optimizing conv2a (multilayer) for {current_target} ===")
+            optimized_conv2a, best_fc3_prob = optimize_conv2a_multilayer(
+                controller, obs_tensor, current_target,
+                n_steps=optimization_steps, lr=0.5, threshold=0.8, fc3_weight=3.0
+            )
+            fc3_probs_history.append(best_fc3_prob)
+
+            # Calculate percentage of conv2a neurons modified
+            original_conv2a = get_conv2a_activations(controller, obs_tensor)
+
+            # Calculate difference and threshold for "significantly changed"
+            diff = torch.abs(optimized_conv2a - original_conv2a)
+            threshold_change = 0.1 * torch.abs(original_conv2a).mean()  # 10% of mean activation
+            significantly_changed = (diff > threshold_change).float()
+            percent_changed = significantly_changed.mean().item() * 100
+
+            print(f"  === Optimization complete: best {current_target} prob = {best_fc3_prob:.1%} ===")
+            print(f"  === Conv2a neurons modified: {percent_changed:.1f}% ===\n")
+            controller.conv2a_override = optimized_conv2a
+            neurons_modified_history.append(percent_changed)
+
+        # Get action with modifications
+        with torch.no_grad():
+            if hasattr(controller, 'conv2a_override'):
+                handles = []
+                def replace_conv2a_hook(module, input, output):
+                    return controller.conv2a_override
+
+                for name, module in controller.model.named_modules():
+                    if 'conv2a' in name and isinstance(module, nn.Conv2d):
+                        handle = module.register_forward_hook(replace_conv2a_hook)
+                        handles.append(handle)
+
+                output = controller.model(obs_tensor)
+
+                for handle in handles:
+                    handle.remove()
+            else:
+                output = controller.model(obs_tensor)
+
+            # Handle both tensor and tuple outputs
+            if isinstance(output, tuple):
+                output = output[0]
+            action = output.argmax().item()
+
+        # Step environment
+        obs, _, done, info = venv.step([action])
+
+        # Check for collections
+        collections = detect_collections(info)
+        if collections:
+            for coll in collections:
+                print(f"  >>> Step {step}: Collected {coll}!")
+                all_collections.append((step, coll))
+
+                # Check if we collected current target
+                if coll == current_target:
+                    current_target_idx += 1
+                    if current_target_idx < len(target_sequence):
+                        current_target = target_sequence[current_target_idx]
+                        print(f"  🎯 Switching to next target: {current_target}")
+                    else:
+                        print(f"  ✅ All targets collected!")
+                        done = [True]
+
+        if done[0]:
+            print(f"\n{'='*40}")
+            print(f"Episode ended at step {step}")
+            break
+
+    # Clean up
+    if hasattr(controller, 'conv2a_override'):
+        delattr(controller, 'conv2a_override')
+    venv.close()
+
+    # Save GIF
+    gif_path = None
+    if observations_for_gif:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        gif_path = f"src/probe_guided_intervention/results/sequential_collection_{timestamp}.gif"
+
+        save_observations_as_gif(observations_for_gif, gif_path, fps=10)
+        print(f"\n📹 Saved GIF to: {gif_path}")
+
+    # Print results
+    print(f"\n{'='*60}")
+    print(f"SEQUENTIAL COLLECTION RESULTS")
+    print(f"{'='*60}")
+    print(f"Total collections: {len(all_collections)}")
+    print(f"Collections: {all_collections}")
+    print(f"Targets completed: {min(current_target_idx, len(target_sequence))}/{len(target_sequence)}")
+    if fc3_probs_history:
+        
+        print(f"Average FC3 probe activation: {np.mean(fc3_probs_history):.1%}")
+        print(f"Final FC3 probe activation: {fc3_probs_history[-1]:.1%}")
+        print(f"Max FC3 probe activation: {np.max(fc3_probs_history):.1%}")
+    if neurons_modified_history:
+        print(f"\nConv2a modification stats:")
+        print(f"  Final % neurons modified: {neurons_modified_history[-1]:.1f}%")
+        print(f"  Average % neurons modified: {np.mean(neurons_modified_history):.1f}%")
+        print(f"  Max % neurons modified: {np.max(neurons_modified_history):.1f}%")
+    print(f"{'='*60}")
+
+    return {
+        'collections': all_collections,
+        'fc3_probs': fc3_probs_history,
+        'neurons_modified': neurons_modified_history,
+        'targets_completed': min(current_target_idx, len(target_sequence)),
+        'gif_path': gif_path
+    }
+
+
 def test_fc3_optimization_rollout(controller, target_entity='green_key', max_steps=30, reoptimize_each_step=True, layer='conv3a'):
     """Test FC3 optimization during rollout using conv2a or conv3a modifications."""
     print(f"\n{'='*60}")
     print(f"FC3 OPTIMIZATION ROLLOUT TEST ({layer.upper()}) - Target: {target_entity}")
     print(f"Re-optimize each step: {reoptimize_each_step}")
     print('='*60)
-
-    from src.probe_guided_intervention.fc3_focused_loss import compute_fc3_adversarial_loss
-    from src.probe_guided_intervention.conv2a_optimizer import optimize_conv2a_for_fc3
-    from src.utils.create_intervention_mazes import create_cross_maze
-    from src.utils.entity_collection_detector import detect_collections
-    from src.utils import heist
-    import torch.nn as nn
 
     # Create environment
     _, venv = create_cross_maze(include_locks=False)
@@ -428,27 +576,38 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
 
         # Optimize based on layer choice
         if step == 0 or reoptimize_each_step:
-            if layer == 'conv2a' or layer == 'conv2a_multilayer':
-                # Use conv2a optimization
-                if layer == 'conv2a_multilayer':
-                    from src.probe_guided_intervention.conv2a_optimizer import optimize_conv2a_multilayer
-                    print(f"\n  === Step {step}: Optimizing conv2a (multilayer) for {target_entity} ===")
-                    optimized_conv2a, best_fc3_prob = optimize_conv2a_multilayer(
+            if layer == 'conv2a' or layer == 'conv2a_multilayer' or layer == 'conv3a_multilayer':
+                # Use conv2a or conv3a optimization
+                if layer == 'conv3a_multilayer':
+                    print(f"\n  === Step {step}: Optimizing conv3a (multilayer) for {target_entity} ===")
+                    optimized_conv3a, best_fc3_prob = optimize_conv3a_multilayer(
                         controller, obs_tensor, target_entity,
                         n_steps=1000, lr=0.5, threshold=0.8, fc3_weight=3.0
                     )
+                    fc3_probs_history.append(best_fc3_prob)
+                    print(f"  === Optimization complete: best {target_entity} prob = {best_fc3_prob:.1%} ===\n")
+                    controller.conv3a_override = optimized_conv3a
+                elif layer == 'conv2a_multilayer':
+                    import time
+                    start_time = time.time()
+                    print(f"\n  === Step {step}: Optimizing conv2a (multilayer) for {target_entity} ===")
+                    optimized_conv2a, best_fc3_prob = optimize_conv2a_multilayer(
+                        controller, obs_tensor, target_entity,
+                        n_steps=100, lr=1.0, threshold=0.8, fc3_weight=3.0  # Reduced steps, increased LR for speed
+                    )
+                    elapsed = time.time() - start_time
+                    fc3_probs_history.append(best_fc3_prob)
+                    print(f"  === Optimization complete in {elapsed:.1f}s: best {target_entity} prob = {best_fc3_prob:.1%} ===\n")
+                    controller.conv2a_override = optimized_conv2a
                 else:
                     print(f"\n  === Step {step}: Optimizing conv2a for {target_entity} ===")
                     optimized_conv2a, best_fc3_prob = optimize_conv2a_for_fc3(
                         controller, obs_tensor, target_entity,
                         n_steps=100, lr=0.5, threshold=0.90
                     )
-
-                fc3_probs_history.append(best_fc3_prob)
-                print(f"  === Optimization complete: best {target_entity} prob = {best_fc3_prob:.1%} ===\n")
-
-                # We'll apply this with hooks when getting action
-                controller.conv2a_override = optimized_conv2a
+                    fc3_probs_history.append(best_fc3_prob)
+                    print(f"  === Optimization complete: best {target_entity} prob = {best_fc3_prob:.1%} ===\n")
+                    controller.conv2a_override = optimized_conv2a
             else:
                 # Original conv3a optimization
                 with torch.no_grad():
@@ -482,8 +641,10 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
                 fc3_probs_history.append(best_fc3_prob)
 
         # Get action with modifications
+        fc3 = None  # Initialize fc3
+        output = None  # Initialize output
         with torch.no_grad():
-            if layer == 'conv2a' and hasattr(controller, 'conv2a_override'):
+            if (layer == 'conv2a' or layer == 'conv2a_multilayer') and hasattr(controller, 'conv2a_override'):
                 # Apply conv2a hook
                 handles = []
                 def replace_conv2a_hook(module, input, output):
@@ -494,6 +655,7 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
                         handle = module.register_forward_hook(replace_conv2a_hook)
                         handles.append(handle)
 
+                # Run model with hooks
                 output = controller.model(obs_tensor)
 
                 # Get FC3 for checking
@@ -506,10 +668,42 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
                         h = module.register_forward_hook(get_fc3)
                         handles.append(h)
 
-                _ = controller.model(obs_tensor)
+                # Run model again to get FC3
+                output = controller.model(obs_tensor)
                 fc3 = fc3_acts.get('fc3')
 
-                # Remove hooks
+                # Remove all hooks
+                for handle in handles:
+                    handle.remove()
+            elif layer == 'conv3a_multilayer' and hasattr(controller, 'conv3a_override'):
+                # Apply conv3a hook
+                handles = []
+                def replace_conv3a_hook(module, input, output):
+                    return controller.conv3a_override
+
+                for name, module in controller.model.named_modules():
+                    if 'conv3a' in name and isinstance(module, nn.Conv2d):
+                        handle = module.register_forward_hook(replace_conv3a_hook)
+                        handles.append(handle)
+
+                # Run model with hooks
+                output = controller.model(obs_tensor)
+
+                # Get FC3 for checking
+                fc3_acts = {}
+                def get_fc3(m, i, o):
+                    fc3_acts['fc3'] = o
+
+                for name, module in controller.model.named_modules():
+                    if name == 'fc3':
+                        h = module.register_forward_hook(get_fc3)
+                        handles.append(h)
+
+                # Run model again to get FC3
+                output = controller.model(obs_tensor)
+                fc3 = fc3_acts.get('fc3')
+
+                # Remove all hooks
                 for handle in handles:
                     handle.remove()
             else:
@@ -517,7 +711,7 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
                 output, _, _, _, _, fc3 = controller.get_conv_layers_with_hook(obs_tensor)
 
             # Check FC3 predictions
-            if step % 5 == 0:
+            if step % 5 == 0 and fc3 is not None:
                 entity_probs = {}
                 for entity, probe in controller.fc3_probes.items():
                     logit = probe(fc3.flatten(1))
@@ -567,9 +761,6 @@ def test_fc3_optimization_rollout(controller, target_entity='green_key', max_ste
     # Save GIF
     gif_path = None
     if observations_for_gif:
-        import os
-        from datetime import datetime
-        from src.utils.helpers import save_observations_as_gif
 
         # Create results directory if it doesn't exist
         results_dir = 'src/probe_guided_intervention/results'
@@ -605,10 +796,6 @@ def test_conv2a_fc3_rollout(controller, target_entity='green_key', max_steps=30)
     print(f"CONV2A → FC3 ROLLOUT TEST - Target: {target_entity}")
     print('='*60)
 
-    from src.probe_guided_intervention.conv2a_optimizer import optimize_conv2a_for_fc3
-    from src.utils.create_intervention_mazes import create_cross_maze
-    from src.utils.entity_collection_detector import detect_collections
-    from src.utils import heist
 
     # Create environment
     _, venv = create_cross_maze(include_locks=False)
